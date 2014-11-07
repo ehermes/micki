@@ -4,8 +4,8 @@ import numpy as np
 from ase.io import read
 from ase.units import J, kJ, mol, kB, _hplanck
 from ase.thermochemistry import IdealGasThermo, HarmonicThermo
-from utils.eref import eref
-from utils.masses import masses
+from eref import eref
+from masses import masses
 import sympy as sym
 
 hplanck = _hplanck * J
