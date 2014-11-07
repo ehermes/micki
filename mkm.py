@@ -6,6 +6,7 @@ from ase.units import J, kJ, mol, kB, _hplanck
 from ase.thermochemistry import IdealGasThermo, HarmonicThermo
 from eref import eref
 from masses import masses
+from odespy import Radau5Implicit
 import sympy as sym
 
 hplanck = _hplanck * J
@@ -18,7 +19,6 @@ class Thermo(object):
         self.mass = [masses[atom.symbol] for atom in self.atoms]
         self.atoms.set_masses(selfmass)
         self._read_hess()
-        self.freqs = freqs
         self.T = T
         self.P = P
         self.geometry = 'linear' if linear else 'nonlinear'
@@ -80,12 +80,12 @@ class Thermo(object):
         self.hess *= _hplanck**2 * J * m**2 * kg / (4 * np.pi**2)
         v, w = np.linalg.eig(self.hess)
         freq = np.sqrt(np.array(v, dtype=complex))
-        self.freq = np.zeros_like(freq, dtype=float)
+        self.freqs = np.zeros_like(freq, dtype=float)
         for i, val in enumerate(freq):
             if val.imag == 0:
-                self.freq[i] = val.real
+                self.freqs[i] = val.real
             else:
-                self.freq[i] = -val.imag
+                self.freqs[i] = -val.imag
         newfreq.sort()
     def __repr__(self):
         return self.atoms.get_chemical_formula()
@@ -359,7 +359,6 @@ class Model(object):
             else:
                 # FIXME
                 raise NotImplementedError
-
         self.f_sym = []
         self.f_exec = []
         for species in self.species:
