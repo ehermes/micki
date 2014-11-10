@@ -40,6 +40,12 @@ class Thermo(object):
     def copy(self):
         raise NotImplementedError
     def _read_hess(self):
+        # This reads the hessian from the OUTCAR and diagonalizes it
+        # to find the frequencies, rather than reading the frequencies
+        # directly from the OUTCAR. This is to ensure we use the same
+        # unit conversion factors, and also to make sure we use the same
+        # atom masses for all calculations. Also, allows for the possibility
+        # of doing partial hessian diagonalization should we want to do that.
         hessblock = 0
         with open(self.outcar, 'r') as f:
             for line in f:
@@ -79,8 +85,13 @@ class Thermo(object):
         self.hess /= np.sqrt(np.outer(mass, mass))
         self.hess *= _hplanck**2 * J * m**2 * kg / (4 * np.pi**2)
         v, w = np.linalg.eig(self.hess)
+        # We're taking the square root of an array that could include
+        # negative numbers, so the result has to be complex to guarantee
+        # we get the correct result.
         freq = np.sqrt(np.array(v, dtype=complex))
         self.freqs = np.zeros_like(freq, dtype=float)
+        # We don't want to deal with complex numbers, so we just convert 
+        # imaginary numbers to negative reals.
         for i, val in enumerate(freq):
             if val.imag == 0:
                 self.freqs[i] = val.real
@@ -138,6 +149,8 @@ class Reactants(object):
         self.elements = {}
         for other in species:
             if isinstance(other, Reactants):
+                # If we're adding a Reactants object to another
+                # Reactants object, just merge species and elements.
                 self.species += other.species
                 for key in other.elements:
                     if key in self.elements:
@@ -145,6 +158,9 @@ class Reactants(object):
                     else:
                         self.elements[key] = other.elements[key]
             elif isinstance(other, Thermo):
+                # If we're adding a Thermo object to a reactants
+                # object, append the Thermo to species and update
+                # elements
                 self.species.append(other)
                 for symbol in other.atoms.get_chemical_symbols():
                     if symbol in self.elements:
@@ -253,6 +269,7 @@ class Reaction(object):
         if method != 'CT' and S0 is not None:
             print "Warning! Parameter S0 is only valid for CT calculations"
     def get_keq(self, T):
+        # Keq = e^(DS/kB - DH/(kB * T))
         self.ds = self.products.get_entropy(T) \
                 - self.reactants.get_entropy(T) 
         self.dh = self.products.get_enthalpy(T) \
@@ -267,11 +284,15 @@ class Reaction(object):
                 self.kfor = krev * keq
                 return self.kfor
             elif self.method == 'CT':
+                # Collision theory:
+                # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
                 if self.S0 is None:
                     self.S0 = 1.
-            self.kfor = self.S0 / (N0 * \
+                self.kfor = self.S0 / (N0 * \
                     np.sqrt(2 * np.pi * self.reactants.get_mass() * kB * T))
         else:
+            # Transition State Theory:
+            # kfor = (kB * T / h) * e^(DS_act/kB - DH_act/(kB * T))
             self.ds_act = self.ts.get_entropy(T) \
                     - self.reactants.get_entropy(T)
             self.dh_act = self.ts.get_enthalpy(T) \
