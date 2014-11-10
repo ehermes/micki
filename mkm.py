@@ -2,7 +2,7 @@
 
 import numpy as np
 from ase.io import read
-from ase.units import J, kJ, mol, kB, _hplanck
+from ase.units import J, kJ, mol, kB, _hplanck, m, kg
 from ase.thermochemistry import IdealGasThermo, HarmonicThermo
 from eref import eref
 from masses import masses
@@ -17,12 +17,12 @@ class Thermo(object):
         self.outcar = outcar
         self.atoms = read(self.outcar, index=0)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
-        self.atoms.set_masses(selfmass)
+        self.atoms.set_masses(self.mass)
         self._read_hess()
         self.T = T
         self.P = P
         self.geometry = 'linear' if linear else 'nonlinear'
-        self.e_elec = atoms.get_potential_energy()
+        self.e_elec = self.atoms.get_potential_energy()
         self.symm = symm
         self.spin = spin
         self.ts = ts
@@ -75,7 +75,7 @@ class Thermo(object):
                 elif hessblock == 3:
                     break
         self.hess = -(self.hess + self.hess.T) / 2.
-        mass = np.array([slab[i].mass for i in index])
+        mass = np.array([self.atoms[i].mass for i in index])
         self.hess /= np.sqrt(np.outer(mass, mass))
         self.hess *= _hplanck**2 * J * m**2 * kg / (4 * np.pi**2)
         v, w = np.linalg.eig(self.hess)
@@ -86,19 +86,19 @@ class Thermo(object):
                 self.freqs[i] = val.real
             else:
                 self.freqs[i] = -val.imag
-        newfreq.sort()
+        self.freqs.sort()
     def __repr__(self):
         return self.atoms.get_chemical_formula()
     def __add__(self, other):
         return Reactants([self, other])
     def __mul__(self, factor):
         assert isinstance(factor, int)
-        return Reactants([self for i in int])
+        return Reactants([self for i in xrange(factor)])
 
 class IdealGas(Thermo):
-    def __init__(self, atoms, freqs, T=298.15, P=101325, linear=False, symm=1, \
+    def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
             spin=0.):
-        super(IdealGas, self).__init__(atoms, freqs, T, P, linear, symm, \
+        super(IdealGas, self).__init__(outcar, T, P, linear, symm, \
                 spin, False)
         self.thermo = IdealGasThermo(
                 self.freqs[6:],
@@ -120,10 +120,9 @@ class IdealGas(Thermo):
 
 
 class Harmonic(Thermo):
-    def __init__(self, atoms, freqs, eslab, T=298.15, ts=False):
-        super(Harmonic, self).__init__(atoms, freqs, T, None, None, None, \
+    def __init__(self, outcar, T=298.15, ts=False):
+        super(Harmonic, self).__init__(outcar, T, None, None, None, \
                 None, ts)
-        self.e_elec -= eslab
         self.thermo = HarmonicThermo(
                 self.freqs[1 if ts else 0:],
                 electronicenergy=self.e_elec,
@@ -242,8 +241,8 @@ class Reaction(object):
         self.method = method
         self.S0 = S0
         if self.method is not None:
-            assert len(self.reactants) == len(self.products) == 1, \
-                    "Only adsorption reactions support the method argument!"
+#            assert len(self.reactants) == len(self.products) == 1, \
+#                    "Only adsorption reactions support the method argument!"
             assert self.ts is None, \
                     "ts and method arguments are not supported together!"
             assert isinstance(self.reactants[0], IdealGas)
@@ -267,7 +266,7 @@ class Reaction(object):
             elif self.method == 'CT':
                 if self.S0 is None:
                     self.S0 = 1.
-            self.kfor = self.S0 / (self.N0 * \
+            self.kfor = self.S0 / (N0 * \
                     np.sqrt(2 * np.pi * self.reactants.get_masses() * kB * self.T))
         else:
             self.ds_act = self.ts.get_entropy(self.T) \
@@ -342,7 +341,7 @@ class Model(object):
         for i, species in enumerate(self.species):
             self.symbols_dict[species] = self.symbols[i]
         self.rates = []
-        self.rate_count[]
+        self.rate_count = []
         for reaction in self.reactions:
             rate_count = {species:0 for species in self.species}
             rate_for = reaction.get_kfor(self.N0)
