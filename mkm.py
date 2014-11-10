@@ -32,7 +32,7 @@ class Thermo(object):
     def get_enthalpy(self, T=None):
         if T is None:
             T = self.T
-        return self.thermo.get_enthalpy(T, verbose=False) #* mol / kJ
+        return self.thermo.get_internal_energy(T, verbose=False) #* mol / kJ
     def get_entropy(self, T=None, P=None):
         if T is None:
             T = self.T
@@ -108,6 +108,10 @@ class IdealGas(Thermo):
                 spin=self.spin,
                 atoms=self.atoms,
                 )
+    def get_enthalpy(self, T=None):
+        if T is None:
+            T = self.T
+        return self.thermo.get_enthalpy(T, verbose=False) #* mol / kJ
     def get_entropy(self, T=None, P=None):
         if T is None:
             T = self.T
@@ -212,8 +216,7 @@ class Reactants(object):
         return len(self.species)
 
 class Reaction(object):
-    def __init__(self, reactants, products, ts=None, T=None, method=None, S0=None):
-        self.T = T
+    def __init__(self, reactants, products, ts=None, method=None, S0=None):
         if isinstance(reactants, Thermo):
             self.reactants = Reactants([reactants])
         elif isinstance(reactants, Reactants):
@@ -249,40 +252,40 @@ class Reaction(object):
             assert isinstance(self.products[0], Harmonic)
         if method != 'CT' and S0 is not None:
             print "Warning! Parameter S0 is only valid for CT calculations"
-    def get_keq(self):
-        self.ds = self.products.get_entropy(self.T) \
-                - self.reactants.get_entropy(self.T) 
-        self.dh = self.products.get_enthalpy(self.T) \
-                - self.reactants.get_enthalpy(self.T)
-        self.keq = np.exp(self.ds/kB - self.dh/(kB * self.T))
+    def get_keq(self, T):
+        self.ds = self.products.get_entropy(T) \
+                - self.reactants.get_entropy(T) 
+        self.dh = self.products.get_enthalpy(T) \
+                - self.reactants.get_enthalpy(T)
+        self.keq = np.exp(self.ds/kB - self.dh/(kB * T))
         return self.keq
-    def get_kfor(self, N0):
+    def get_kfor(self, T, N0):
         if self.ts is None:
             if self.method == 'des':
-                krev = self.get_krev(N0)
-                keq = self.get_keq()
+                krev = self.get_krev(T, N0)
+                keq = self.get_keq(T)
                 self.kfor = krev * keq
                 return self.kfor
             elif self.method == 'CT':
                 if self.S0 is None:
                     self.S0 = 1.
             self.kfor = self.S0 / (N0 * \
-                    np.sqrt(2 * np.pi * self.reactants.get_masses() * kB * self.T))
+                    np.sqrt(2 * np.pi * self.reactants.get_mass() * kB * T))
         else:
-            self.ds_act = self.ts.get_entropy(self.T) \
-                    - self.reactants.get_entropy(self.T)
-            self.dh_act = self.ts.get_enthalpy(self.T) \
-                    - self.reactants.get_enthalpy(self.T)
-            self.kfor = (kB * self.T / hplanck) * np.exp(self.ds_act / kB) \
-                    * np.exp(-self.dh_act / (kB * self.T))
+            self.ds_act = self.ts.get_entropy(T) \
+                    - self.reactants.get_entropy(T)
+            self.dh_act = self.ts.get_enthalpy(T) \
+                    - self.reactants.get_enthalpy(T)
+            self.kfor = (kB * T / hplanck) * np.exp(self.ds_act / kB) \
+                    * np.exp(-self.dh_act / (kB * T))
         return self.kfor
-    def get_krev(self, N0):
+    def get_krev(self, T, N0):
         if self.ts is None:
             if self.method == 'des':
                 # FIXME
                 raise NotImplementedError
-        keq = self.get_keq()
-        kfor = self.get_kfor(N0)
+        keq = self.get_keq(T)
+        kfor = self.get_kfor(T, N0)
         self.krev = kfor / keq
         return self.krev
     def __repr__(self):
@@ -293,10 +296,11 @@ class Reaction(object):
         return string
 
 class Model(object):
-    def __init__(self, reactions, reactor, N0):
+    def __init__(self, reactions, reactor, T, N0):
         self.reactions = []
         self.species = []
         self.reactor = reactor
+        self.T = T
         for reaction in reactions:
             assert isinstance(reaction, Reaction)
             self.reactions.append(reaction)
@@ -318,10 +322,10 @@ class Model(object):
         assert isinstance(species, Harmonic)
         if species not in self.species:
             self.species.append(species)
-        for a in self.species:
-            if isinstance(a, Harmonic):
-                for b in a:
-                    b.e_elec -= species.e_elec
+#        for a in self.species:
+#            if isinstance(a, Harmonic):
+#                for b in a:
+#                    b.e_elec -= species.e_elec
         self.vacancy = species
     def set_initial_conditions(self, U0):
         self.U0 = []
@@ -333,7 +337,7 @@ class Model(object):
         self._initialize()
     def _initialize(self):
         self.M = np.identity(len(self.species))
-        for i, species in self.species:
+        for i, species in enumerate(self.species):
             if species is self.vacancy:
                 self.M[i, i] = 0
         self.symbols = sym.symbols('x0:{}'.format(len(self.species)))
@@ -344,11 +348,11 @@ class Model(object):
         self.rate_count = []
         for reaction in self.reactions:
             rate_count = {species:0 for species in self.species}
-            rate_for = reaction.get_kfor(self.N0)
+            rate_for = reaction.get_kfor(self.T, self.N0)
             for species in reaction.reactants:
                 rate_for *= self.symbols_dict[species]
                 rate_count[species] += 1
-            rate_rev = reaction.get_krev(self.N0)
+            rate_rev = reaction.get_krev(self.T, self.N0)
             for species in reaction.products:
                 rate_rev *= self.symbols_dict[species]
                 rate_count[species] -= 1
@@ -376,19 +380,20 @@ class Model(object):
                 jac_exec.append(sym.lambdify(self.symbols, sym.diff(f, \
                         self.symbols_dict[species])))
             self.jac_exec.append(jac_exec)
-        self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
-                rtol=1e-8)
-        self.model.initial_condition(self.U0)
+#        self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
+#                rtol=1e-8)
+        self.model = Radau5Implicit(f=self.f, mas=self.mas, rtol=1e-8)
+        self.model.set_initial_condition(self.U0)
     def f(self, x, t):
         y = np.zeros_like(self.f_exec)
         for i in xrange(len(self.species)):
-            y[i] = self.f_exec[i](x)
+            y[i] = self.f_exec[i](*x)
         return y
     def jac(self, x, t):
         y = np.zeros_like(self.jac_exec)
         for i in xrange(len(self.species)):
             for j in xrange(len(self.species)):
-                y[i, j] = self.jac_exec[i][j](x)
+                y[i, j] = self.jac_exec[i][j](*x)
         return y
     def mas(self):
         return self.M
