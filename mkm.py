@@ -345,20 +345,16 @@ class Model(object):
         self.rate_count[]
         for reaction in self.reactions:
             rate_count = {species:0 for species in self.species}
-            if reaction.ts is not None:
-                rate_for = reaction.get_kfor(self.N0)
-                for species in reaction.reactants:
-                    rate_for *= self.symbols_dict[species]
-                    rate_count[species] += 1
-                rate_rev = reaction.get_krev(self.N0)
-                for species in reaction.products:
-                    rate_rev *= self.symbols_dict[species]
-                    rate_count[species] -= 1
-                self.rates.append(rate_for - rate_rev)
-                self.rate_count.append(rate_count)
-            else:
-                # FIXME
-                raise NotImplementedError
+            rate_for = reaction.get_kfor(self.N0)
+            for species in reaction.reactants:
+                rate_for *= self.symbols_dict[species]
+                rate_count[species] += 1
+            rate_rev = reaction.get_krev(self.N0)
+            for species in reaction.products:
+                rate_rev *= self.symbols_dict[species]
+                rate_count[species] -= 1
+            self.rates.append(rate_for - rate_rev)
+            self.rate_count.append(rate_count)
         self.f_sym = []
         self.f_exec = []
         for species in self.species:
