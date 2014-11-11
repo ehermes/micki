@@ -4,7 +4,6 @@ import numpy as np
 from ase.io import read
 from ase.units import J, kJ, mol, kB, _hplanck, m, kg
 from ase.thermochemistry import IdealGasThermo, HarmonicThermo
-from eref import eref
 from masses import masses
 from odespy import Radau5Implicit
 import sympy as sym
@@ -26,9 +25,6 @@ class Thermo(object):
         self.symm = symm
         self.spin = spin
         self.ts = ts
-        for atom in self.atoms:
-            if atom.symbol in eref:
-                self.e_elec -= eref[atom.symbol]
     def get_enthalpy(self, T=None):
         if T is None:
             T = self.T
@@ -134,6 +130,8 @@ class IdealGas(Thermo):
             spin=0.):
         super(IdealGas, self).__init__(outcar, T, P, linear, symm, \
                 spin, False)
+        self.gas = True
+        assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
         self.thermo = IdealGasThermo(
                 self.freqs[6:],
                 self.geometry,
@@ -153,22 +151,26 @@ class IdealGas(Thermo):
             P = self.P
         return self.thermo.get_entropy(T, P, verbose=False) #* 1000 * mol / kJ
     def copy(self):
-        return self.__class__(self.outcar, self.T, self.P, self.geometry, \
+        linear = True if self.geometry == 'linear' else False
+        return self.__class__(self.outcar, self.T, self.P, linear, \
                 self.symm, self.spin)
 
 class Harmonic(Thermo):
     def __init__(self, outcar, T=298.15, ts=False):
         super(Harmonic, self).__init__(outcar, T, None, None, None, \
                 None, ts)
+        self.gas = False
+        nimag = 1 if ts else 0
+        assert np.all(self.freqs[nimag:] > 0), "Imaginary frequencies found!"
         self.thermo = HarmonicThermo(
-                self.freqs[1 if ts else 0:],
+                self.freqs[nimag:],
                 electronicenergy=self.e_elec,
                 )
     def copy(self):
         return self.__class__(self.outcar, self.T, self.ts)
 
 class Shomate(Thermo):
-    def __init__(self, geometry, shomatepars, T):
+    def __init__(self, geometry, shomatepars, gas, T):
         self.geometry = geometry
         self.atoms = read(geometry)
         self.shomatepars = shomatepars
@@ -180,6 +182,7 @@ class Shomate(Thermo):
         self.F = shomatepars[5]
         self.G = shomatepars[6]
         self.T = T
+        self.gas = gas
     def get_enthalpy(self, T=None):
         if T is None:
             T = self.T
@@ -316,8 +319,8 @@ class Reaction(object):
         if self.method is not None:
             assert self.ts is None, \
                     "ts and method arguments are not supported together!"
-            assert isinstance(self.reactants[0], IdealGas)
-            assert isinstance(self.products[0], Harmonic)
+#            assert isinstance(self.reactants[0], IdealGas)
+#            assert isinstance(self.products[0], Harmonic)
         if method != 'CT' and S0 is not None:
             print "Warning! Parameter S0 is only valid for CT calculations"
     def get_keq(self, T):
@@ -392,13 +395,10 @@ class Model(object):
         if species not in self.species:
             self.species.append(species)
     def set_vacancy(self, species):
-        assert isinstance(species, Harmonic)
+        assert species.gas is False
+#        assert isinstance(species, Harmonic)
         if species not in self.species:
             self.species.append(species)
-#        for a in self.species:
-#            if isinstance(a, Harmonic):
-#                for b in a:
-#                    b.e_elec -= species.e_elec
         self.vacancy = species
     def set_initial_conditions(self, U0):
         self.U0 = []
@@ -414,7 +414,8 @@ class Model(object):
             if species is self.vacancy:
                 self.M[i, i] = 0
             if self.reactor.upper == 'BATCH':
-                if isinstance(species, Harmonic):
+#                if isinstance(species, Harmonic):
+                if species.gas is False:
                     self.M[i, i] = 0
         self.symbols = sym.symbols('x0:{}'.format(len(self.species)))
         self.symbols_dict = {}
@@ -441,9 +442,11 @@ class Model(object):
             if species is self.vacancy:
                 f = 1
                 for a in self.species:
-                    if isinstance(a, Harmonic):
+#                    if isinstance(a, Harmonic):
+                    if a.gas is False:
                         f -= self.symbols_dict[a]
-            elif isinstance(species, Harmonic):
+#            elif isinstance(species, Harmonic):
+            elif species.gas is False:
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
             else:
