@@ -80,6 +80,27 @@ class Thermo(object):
                         hessblock = 1
                 elif hessblock == 3:
                     break
+
+#        # Temporary work around: My test system OUTCARs include some
+#        # metal atoms in the hessian, this seems to cause some problems
+#        # with the MKM. So, here I'm taking only the non-metal part
+#        # of the hessian and diagonalizing that.
+#        nonmetal = []
+#        for i, j in enumerate(index):
+#            if self.atoms[j].symbol != 'Pt':
+#                nonmetal.append(i)
+#        if not nonmetal:
+#            self.freqs = np.array([])
+#            return
+#        newhess = np.zeros((len(nonmetal), len(nonmetal)))
+#        newindex = np.zeros(len(nonmetal), dtype=int)
+#        for i, a in enumerate(nonmetal):
+#            newindex[i] = index[a]
+#            for j, b in enumerate(nonmetal):
+#                newhess[i, j] = self.hess[a, b]
+#        self.hess = newhess
+#        index = newindex
+
         self.hess = -(self.hess + self.hess.T) / 2.
         mass = np.array([self.atoms[i].mass for i in index])
         self.hess /= np.sqrt(np.outer(mass, mass))
@@ -105,6 +126,8 @@ class Thermo(object):
     def __mul__(self, factor):
         assert isinstance(factor, int)
         return Reactants([self for i in xrange(factor)])
+    def __rmul__(self, factor):
+        return self.__mul__(factor)
 
 class IdealGas(Thermo):
     def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
@@ -130,9 +153,8 @@ class IdealGas(Thermo):
             P = self.P
         return self.thermo.get_entropy(T, P, verbose=False) #* 1000 * mol / kJ
     def copy(self):
-        return self.__class__(self.atoms, self.freqs, self.T, self.P, \
-                self.linear, selfsymm, self.spin)
-
+        return self.__class__(self.outcar, self.T, self.P, self.geometry, \
+                self.symm, self.spin)
 
 class Harmonic(Thermo):
     def __init__(self, outcar, T=298.15, ts=False):
@@ -142,6 +164,36 @@ class Harmonic(Thermo):
                 self.freqs[1 if ts else 0:],
                 electronicenergy=self.e_elec,
                 )
+    def copy(self):
+        return self.__class__(self.outcar, self.T, self.ts)
+
+class Shomate(Thermo):
+    def __init__(self, geometry, shomatepars, T):
+        self.geometry = geometry
+        self.atoms = read(geometry)
+        self.shomatepars = shomatepars
+        self.A = shomatepars[0]
+        self.B = shomatepars[1]
+        self.C = shomatepars[2]
+        self.D = shomatepars[3]
+        self.E = shomatepars[4]
+        self.F = shomatepars[5]
+        self.G = shomatepars[6]
+        self.T = T
+    def get_enthalpy(self, T=None):
+        if T is None:
+            T = self.T
+        t = T / 1000
+        return self.A*t + self.B*t**2/2. + self.C*t**3/3. + self.D*t**4/4. \
+                - self.E/t + self.F
+    def get_entropy(self, T=None, P=None):
+        if T is None:
+            T = self.T
+        t = T / 1000
+        return self.A*np.log(t) + self.B*t + self.C*t**2/2. + self.D*t**3/3. \
+                - self.E/(2*t**2) + self.G
+    def copy(self):
+        return self.__class__(self.geometry, self.shomatepars, self.T)
 
 class Reactants(object):
     def __init__(self, species):
@@ -217,6 +269,8 @@ class Reactants(object):
         new = self.copy()
         new *= factor
         return new
+    def __rmul__(self, factor):
+        return self.__mul__(factor)
     def __repr__(self):
         string = ''
         for species in self.species:
@@ -260,8 +314,6 @@ class Reaction(object):
         self.method = method
         self.S0 = S0
         if self.method is not None:
-#            assert len(self.reactants) == len(self.products) == 1, \
-#                    "Only adsorption reactions support the method argument!"
             assert self.ts is None, \
                     "ts and method arguments are not supported together!"
             assert isinstance(self.reactants[0], IdealGas)
@@ -372,11 +424,11 @@ class Model(object):
             rate_for = reaction.get_kfor(self.T, self.N0)
             for species in reaction.reactants:
                 rate_for *= self.symbols_dict[species]
-                rate_count[species] += 1
+                rate_count[species] -= 1
             rate_rev = reaction.get_krev(self.T, self.N0)
             for species in reaction.products:
                 rate_rev *= self.symbols_dict[species]
-                rate_count[species] -= 1
+                rate_count[species] += 1
             self.rates.append(rate_for - rate_rev)
             self.rate_count.append(rate_count)
         self.f_sym = []
@@ -401,9 +453,8 @@ class Model(object):
                 jac_exec.append(sym.lambdify(self.symbols, sym.diff(f, \
                         self.symbols_dict[species])))
             self.jac_exec.append(jac_exec)
-#        self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
-#                rtol=1e-8)
-        self.model = Radau5Implicit(f=self.f, mas=self.mas, rtol=1e-8)
+        self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
+                rtol=1e-8)
         self.model.set_initial_condition(self.U0)
     def f(self, x, t):
         y = np.zeros_like(self.f_exec)
@@ -419,5 +470,5 @@ class Model(object):
     def mas(self):
         return self.M
     def solve(self, t):
-        U1, t1 = self.model.solve(t)
-        return U1, t1
+        self.U, self.t = self.model.solve(t)
+        return self.U, self.t
