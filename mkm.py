@@ -413,6 +413,9 @@ class Model(object):
         for i, species in enumerate(self.species):
             if species is self.vacancy:
                 self.M[i, i] = 0
+            if self.reactor.upper == 'BATCH':
+                if isinstance(species, Harmonic):
+                    self.M[i, i] = 0
         self.symbols = sym.symbols('x0:{}'.format(len(self.species)))
         self.symbols_dict = {}
         for i, species in enumerate(self.species):
@@ -443,6 +446,10 @@ class Model(object):
             elif isinstance(species, Harmonic):
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
+            else:
+                if self.reactor.upper() == 'BATCH':
+                    for i, rate in enumerate(self.rates):
+                        f += self.rate_count[i][species] * rate
             self.f_sym.append(f)
             self.f_exec.append(sym.lambdify(self.symbols, f))
 
@@ -470,5 +477,11 @@ class Model(object):
     def mas(self):
         return self.M
     def solve(self, t):
-        self.U, self.t = self.model.solve(t)
+        U1, self.t = self.model.solve(t)
+        self.U =[]
+        for i, t in enumerate(self.t):
+            Ui = {}
+            for j, species in enumerate(self.species):
+                Ui[species] = U1[i][j]
+            self.U.append(Ui)
         return self.U, self.t
