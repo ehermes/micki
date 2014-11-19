@@ -2,20 +2,20 @@
 
 import numpy as np
 from ase.io import read
-from ase.units import J, kJ, mol, kB, _hplanck, m, kg
+from ase.units import J, kJ, mol, kB, _hplanck, m, kg, _k, _Nav
 from ase.thermochemistry import IdealGasThermo, HarmonicThermo
 from masses import masses
 from odespy import Radau5Implicit
 import sympy as sym
 
-#hplanck = _hplanck * J
-hplanck = 6.626068e-34 * J
-kB = 1.3806503e-23 * J
-R = 8.3144621 * J / mol
+hplanck = _hplanck * J
+#hplanck = 6.626068e-34 * J
+#kB = 1.3806503e-23 * J
+#R = 8.3144621 * J / mol
 
 class Thermo(object):
     def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
-            spin=0., ts=False):
+            spin=0., ts=False, h_scale=1.0, s_scale=1.0):
         self.outcar = outcar
         self.atoms = read(self.outcar, index=0)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
@@ -28,14 +28,16 @@ class Thermo(object):
         self.symm = symm
         self.spin = spin
         self.ts = ts
+        self.h_scale = h_scale
+        self.s_scale = s_scale
     def get_enthalpy(self, T=None):
         if T is None:
             T = self.T
-        return self.thermo.get_internal_energy(T, verbose=False) #* mol / kJ
+        return self.thermo.get_internal_energy(T, verbose=False) * self.h_scale
     def get_entropy(self, T=None, P=None):
         if T is None:
             T = self.T
-        return self.thermo.get_entropy(T, verbose=False) #* 1000 * mol / kJ
+        return self.thermo.get_entropy(T, verbose=False) * self.s_scale
     def copy(self):
         raise NotImplementedError
     def _read_hess(self):
@@ -106,8 +108,7 @@ class Thermo(object):
         self.hess *= _hplanck**2 * J * m**2 * kg / (4 * np.pi**2)
         v, w = np.linalg.eig(self.hess)
         # We're taking the square root of an array that could include
-        # negative numbers, so the result has to be complex to guarantee
-        # we get the correct result.
+        # negative numbers, so the result has to be complex.
         freq = np.sqrt(np.array(v, dtype=complex))
         self.freqs = np.zeros_like(freq, dtype=float)
         # We don't want to deal with complex numbers, so we just convert 
@@ -130,9 +131,9 @@ class Thermo(object):
 
 class IdealGas(Thermo):
     def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
-            spin=0.):
+            spin=0., h_scale=1.0, s_scale=1.0):
         super(IdealGas, self).__init__(outcar, T, P, linear, symm, \
-                spin, False)
+                spin, False, h_scale, s_scale)
         self.gas = True
         assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
         self.thermo = IdealGasThermo(
@@ -146,13 +147,13 @@ class IdealGas(Thermo):
     def get_enthalpy(self, T=None):
         if T is None:
             T = self.T
-        return self.thermo.get_enthalpy(T, verbose=False) #* mol / kJ
+        return self.thermo.get_enthalpy(T, verbose=False) * self.h_scale
     def get_entropy(self, T=None, P=None):
         if T is None:
             T = self.T
         if P is None:
             P = self.P
-        return self.thermo.get_entropy(T, P, verbose=False) #* 1000 * mol / kJ
+        return self.thermo.get_entropy(T, P, verbose=False) * self.s_scale
     def copy(self):
         linear = True if self.geometry == 'linear' else False
         return self.__class__(self.outcar, self.T, self.P, linear, \
@@ -307,7 +308,8 @@ class Reactants(object):
         return len(self.species)
 
 class Reaction(object):
-    def __init__(self, reactants, products, ts=None, method=None, S0=None):
+    def __init__(self, reactants, products, ts=None, method=None, S0=None, \
+            dh_scale=1.0, ds_scale=1.0, dh_act_scale=1.0, ds_act_scale=1.0):
         if isinstance(reactants, Thermo):
             self.reactants = Reactants([reactants])
         elif isinstance(reactants, Reactants):
@@ -329,10 +331,7 @@ class Reaction(object):
             else:
                 raise NotImplementedError
         # Mass balance requires that each element in the reactant is preserved
-        # in the product and in any transition states. An example microkinetic
-        # model whose results I am attempting to reproduce do not seem to
-        # follow mass balance, so this check is being temporarily disabled.
-        # FIXME
+        # in the product and in any transition states.
         for element in self.reactants.elements:
             assert self.reactants.elements[element] == self.products.elements[element]
             if self.ts is not None:
@@ -346,14 +345,20 @@ class Reaction(object):
 #            assert isinstance(self.products[0], Harmonic)
         if method != 'CT' and S0 is not None:
             print "Warning! Parameter S0 is only valid for CT calculations"
+        self.dh_scale = dh_scale
+        self.ds_scale = ds_scale
+        self.dh_act_scale = dh_act_scale
+        self.ds_act_scale = ds_act_scale
     def get_keq(self, T):
         # Keq = e^(DS/kB - DH/(kB * T))
         self.ds = self.products.get_entropy(T) \
                 - self.reactants.get_entropy(T) 
         self.dh = self.products.get_enthalpy(T) \
                 - self.reactants.get_enthalpy(T)
-#        self.keq = np.exp(self.ds/kB - self.dh/(kB * T))
-        self.keq = np.exp(self.ds/R - self.dh/(R * T))
+        self.dh *= self.dh_scale
+        self.ds *= self.ds_scale
+        self.keq = np.exp(self.ds/kB - self.dh/(kB * T))
+#        self.keq = np.exp(self.ds/R - self.dh/(R * T))
         if self.method is not None:
             if self.method.upper() == 'SPECIAL':
                 self.keq = 1e-60
@@ -369,10 +374,13 @@ class Reaction(object):
                 # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
                 if self.S0 is None:
                     self.S0 = 1.
-                self.kfor = self.S0 / (N0 * \
-                    np.sqrt(2 * np.pi * self.reactants.get_mass() * kB * T))
+                self.kfor = (1000 * self.S0 * _Nav/ N0) * np.sqrt(_k * T * kg \
+                        / (2 * np.pi * self.reactants.get_mass()))
+#                self.kfor = self.S0 / (N0 * \
+#                    np.sqrt(2 * np.pi * self.reactants.get_mass() * kB * T \
+#                    / (J * kg)))
             elif self.method.upper() == 'EQUIL':
-                self.kfor = 1e60
+                self.kfor = 1e30
             elif self.method.upper() == 'SPECIAL':
                 self.kfor = 1e-30
         else:
@@ -382,10 +390,14 @@ class Reaction(object):
                     - self.reactants.get_entropy(T)
             self.dh_act = self.ts.get_enthalpy(T) \
                     - self.reactants.get_enthalpy(T)
+            self.ds_act *= self.ds_act_scale
+            self.dh_act *= self.dh_act_scale
+            self.kfor = (_k * T / _hplanck) * np.exp(self.ds_act / kB) \
+                    * np.exp(-self.dh_act / (kB * T))
 #            self.kfor = (kB * T / hplanck) * np.exp(self.ds_act / kB) \
 #                    * np.exp(-self.dh_act / (kB * T))
-            self.kfor = (kB * T / hplanck) * np.exp(self.ds_act / R) \
-                    * np.exp(-self.dh_act / (R * T))
+#            self.kfor = (kB * T / hplanck) * np.exp(self.ds_act / R) \
+#                    * np.exp(-self.dh_act / (R * T))
         return self.kfor
     def get_krev(self, T, N0):
         if self.ts is None:
@@ -396,6 +408,11 @@ class Reaction(object):
         kfor = self.get_kfor(T, N0)
         self.krev = kfor / keq
         return self.krev
+    def set_scale(self, dh=1.0, ds=1.0, dh_act=1.0, ds_act=1.0):
+        self.dh_scale = dh
+        self.ds_scale = ds
+        self.dh_act_scale = dh_act
+        self.ds_act_scale = ds_act
     def __repr__(self):
         string = self.reactants.__repr__() + ' <-> '
         if self.ts is not None:
@@ -404,13 +421,16 @@ class Reaction(object):
         return string
 
 class Model(object):
-    def __init__(self, reactions, reactor, T, N0, Ptot, Pbuffer):
+#    def __init__(self, reactions, reactor, T, N0, Ptot, Pbuffer):
+    def __init__(self, reactions, reactor, T, N0, V, nsites):
         self.reactions = []
         self.species = []
         self.reactor = reactor
         self.T = T
-        self.Ptot = Ptot
-        self.Pbuffer = Pbuffer
+#        self.Ptot = Ptot
+#        self.Pbuffer = Pbuffer
+        self.V = V
+        self.nsites = nsites
         for reaction in reactions:
             assert isinstance(reaction, Reaction)
             self.reactions.append(reaction)
@@ -457,20 +477,20 @@ class Model(object):
         for i, species in enumerate(self.species):
             if species is self.vacancy:
                 self.M[i, i] = 0
-            if not species.gas:
-                if self.reactor.upper() in ['BATCH', 'PFR']:
-                    self.M[i, i] = 0
+#            if not species.gas:
+#                if self.reactor.upper() in ['BATCH', 'PFR']:
+#                    self.M[i, i] = 0
         # Create sympy symbols for creating f and jac
         self.symbols = sym.symbols('x0:{}'.format(len(self.species)))
         self.symbols_dict = {}
         for i, species in enumerate(self.species):
             self.symbols_dict[species] = self.symbols[i]
         # Normalize gas pressure
-        self.P = self.Pbuffer
-        for species in self.species:
-            if species.gas:
-                self.P += self.symbols_dict[species]
-        self.Pnorm = self.Ptot / self.P
+#        self.P = self.Pbuffer
+#        for species in self.species:
+#            if species.gas:
+#                self.P += self.symbols_dict[species]
+#        self.Pnorm = self.Ptot / self.P
         # Set up rates
         self.rates = []
         self.rate_count = []
@@ -479,14 +499,14 @@ class Model(object):
             rate_for = reaction.get_kfor(self.T, self.N0)
             for species in reaction.reactants:
                 rate_for *= self.symbols_dict[species]
-                if species.gas:
-                    rate_for *= self.Pnorm
+#                if species.gas:
+#                    rate_for *= self.Pnorm
                 rate_count[species] -= 1
             rate_rev = reaction.get_krev(self.T, self.N0)
             for species in reaction.products:
                 rate_rev *= self.symbols_dict[species]
-                if species.gas:
-                    rate_for *= self.Pnorm
+#                if species.gas:
+#                    rate_for *= self.Pnorm
                 rate_count[species] += 1
             self.rates.append(rate_for - rate_rev)
             self.rate_count.append(rate_count)
@@ -505,7 +525,8 @@ class Model(object):
             else:
                 if self.reactor.upper() != 'CSTR':
                     for i, rate in enumerate(self.rates):
-                        f += self.rate_count[i][species] * rate
+                        f += self.rate_count[i][species] * rate * self.nsites \
+                                / self.V
             self.f_sym.append(f)
             self.f_exec.append(sym.lambdify(self.symbols, f))
 
