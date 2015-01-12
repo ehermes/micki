@@ -95,11 +95,15 @@ class Reaction(object):
             kfor = self.get_kfor(T, N0)
             self.krev = kfor / keq
         return self.krev
-    def set_scale(self, dh=1.0, ds=1.0, dh_act=1.0, ds_act=1.0):
-        self.dh_scale = dh
-        self.ds_scale = ds
-        self.dh_act_scale = dh_act
-        self.ds_act_scale = ds_act
+    def set_scale(self, dh=None, ds=None, dh_act=None, ds_act=None):
+        if dh is not None:
+            self.dh_scale = dh
+        if ds is not None:
+            self.ds_scale = ds
+        if dh_act is not None:
+            self.dh_act_scale = dh_act
+        if ds_act is not None:
+            self.ds_act_scale = ds_act
     def __repr__(self):
         string = self.reactants.__repr__() + ' <-> '
         if self.ts is not None:
@@ -189,12 +193,14 @@ class Model(object):
     def mas(self):
         return self.M
     def solve(self, t):
-        U1, self.t = self.model.solve(t)
+        self.U1, self.t = self.model.solve(t)
+        return self._results()
+    def _results(self):
         self.U =[]
         for i, t in enumerate(self.t):
             Ui = {}
             for j, species in enumerate(self.species):
-                Ui[species] = U1[i][j]
+                Ui[species] = self.U1[i][j]
             self.U.append(Ui)
         return self.U, self.t
 
@@ -279,11 +285,10 @@ class LiquidPhaseModel(Model):
         j = 0
         for species in self.species:
             if species.gas:
+                self.symbols_dict[species] = self.symbols[j]
                 for i in xrange(self.nz):
                     self.symbols_dict[(species, i)] = self.symbols[j]
                     j += 1
-                else:
-                    self.symbols_dict[species] = self.symbols[j - 1]
             else:
                 self.symbols_dict[species] = self.symbols[j]
                 j += 1
@@ -295,6 +300,7 @@ class LiquidPhaseModel(Model):
             f = 0
             if species.gas:
                 for i in xrange(self.nz):
+                    f = 0
                     if i == 0:
                         f += (species.D / self.dz**2) \
                                 * (self.symbols_dict[(species, i + 1)] \
@@ -303,7 +309,7 @@ class LiquidPhaseModel(Model):
                             f += self.rate_count[j][species] * rate * self.nsites / self.V
                     elif i == self.nz - 2:
                         f += (species.D / self.dz**2) \
-                                * ((self.dV / self.V) * self.symbols_dict[(species, i + 1)] \
+                                * (self.symbols_dict[(species, i + 1)] \
                                 - 2 * self.symbols_dict[(species, i)] \
                                 + self.symbols_dict[(species, i - 1)])
                     elif i == self.nz - 1:
@@ -311,11 +317,12 @@ class LiquidPhaseModel(Model):
                             f += (species.D / self.dz**2) \
                                     * (-(self.dV / self.V) * self.symbols_dict[(species, i)] \
                                     + self.symbols_dict[(species, i - 1)])
+
                     else:
                         f += (species.D / self.dz**2) \
                                 * (self.symbols_dict[(species, i + 1)] \
                                 - 2 * self.symbols_dict[(species, i)] \
-                                + self.symbols_dict[(species)])
+                                + self.symbols_dict[(species, i - 1)])
                     self.f_sym.append(f)
                     self.f_exec.append(sym.lambdify(self.symbols, f))
                 else:
@@ -341,3 +348,19 @@ class LiquidPhaseModel(Model):
         self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
                 rtol=1e-8)
         self.model.set_initial_condition(self.U0)
+    def _results(self):
+        self.U =[]
+        for i, t in enumerate(self.t):
+            Ui = {}
+            j = 0
+            for species in self.species:
+                if species.gas:
+                    for k in xrange(self.nz):
+                        Ui[(species, k)] = self.U1[i][j]
+                        j += 1
+                else:
+                    Ui[species] = self.U1[i][j]
+                    j += 1
+            self.U.append(Ui)
+        return self.U, self.t
+
