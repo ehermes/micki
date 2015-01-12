@@ -314,8 +314,8 @@ class LiquidPhaseModel(Model):
                                 + self.symbols_dict[(species, i - 1)])
                     elif i == self.nz - 1:
                         if not species.fixed:
-                            f += (species.D / self.dz**2) \
-                                    * (-(self.dV / self.V) * self.symbols_dict[(species, i)] \
+                            f += (species.D  * self.dV / (self.dz**2 * self.V)) \
+                                    * (-self.symbols_dict[(species, i)] \
                                     + self.symbols_dict[(species, i - 1)])
 
                     else:
