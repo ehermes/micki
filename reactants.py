@@ -6,6 +6,7 @@ from masses import masses
 
 
 class _Thermo(object):
+    """Generic thermodynamics object"""
     def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
             spin=0., ts=False, h_scale=1.0, s_scale=1.0, fixed=False, label=None):
         self.outcar = outcar
@@ -32,6 +33,8 @@ class _Thermo(object):
         if T is None:
             T = self.T
         return self.thermo.get_entropy(T, verbose=False) * self.s_scale
+    def get_energy(self):
+        return self.e_elec
     def copy(self):
         raise NotImplementedError
     def _read_hess(self):
@@ -45,7 +48,7 @@ class _Thermo(object):
         with open(self.outcar, 'r') as f:
             for line in f:
                 line = line.strip()
-                if line:
+                if line != '':
                     if hessblock == 1:
                         if line.startswith('---'):
                             hessblock = 2
@@ -69,35 +72,16 @@ class _Thermo(object):
                         j = 0
                     elif hessblock == 3:
                         line = line.split()
-                        self.hess[j] = np.array([float(val) for val in line[1:]])
+                        self.hess[j] = np.array([float(val) for val in line[1:]], \
+                                dtype=float)
                         j += 1
                     elif line.startswith('SECOND DERIVATIVES'):
                         hessblock = 1
                 elif hessblock == 3:
                     break
 
-#        # Temporary work around: My test system OUTCARs include some
-#        # metal atoms in the hessian, this seems to cause some problems
-#        # with the MKM. So, here I'm taking only the non-metal part
-#        # of the hessian and diagonalizing that.
-#        nonmetal = []
-#        for i, j in enumerate(index):
-#            if self.atoms[j].symbol != 'Pt':
-#                nonmetal.append(i)
-#        if not nonmetal:
-#            self.freqs = np.array([])
-#            return
-#        newhess = np.zeros((len(nonmetal), len(nonmetal)))
-#        newindex = np.zeros(len(nonmetal), dtype=int)
-#        for i, a in enumerate(nonmetal):
-#            newindex[i] = index[a]
-#            for j, b in enumerate(nonmetal):
-#                newhess[i, j] = self.hess[a, b]
-#        self.hess = newhess
-#        index = newindex
-
         self.hess = -(self.hess + self.hess.T) / 2.
-        mass = np.array([self.atoms[i].mass for i in index])
+        mass = np.array([self.atoms[i].mass for i in index], dtype=float)
         self.hess /= np.sqrt(np.outer(mass, mass))
         self.hess *= _hplanck**2 * J * m**2 * kg / (4 * np.pi**2)
         v, w = np.linalg.eig(self.hess)
@@ -128,10 +112,11 @@ class _Thermo(object):
 
 class IdealGas(_Thermo):
     def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
-            spin=0., h_scale=1.0, s_scale=1.0, fixed=True, label=None):
+            spin=0., D=None, h_scale=1.0, s_scale=1.0, fixed=True, label=None):
         super(IdealGas, self).__init__(outcar, T, P, linear, symm, \
                 spin, False, h_scale, s_scale, fixed, label)
         self.gas = True
+        self.D = D
         assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
         self.thermo = IdealGasThermo(
                 self.freqs[6:],
@@ -157,7 +142,7 @@ class IdealGas(_Thermo):
                 self.symm, self.spin)
 
 class Harmonic(_Thermo):
-    def __init__(self, outcar, T=298.15, ts=False, nsites=1, h_scale=1.0, \
+    def __init__(self, outcar, T=298.15, ts=False, coord=1, h_scale=1.0, \
             s_scale=1.0, fixed=False, label=None):
         super(Harmonic, self).__init__(outcar, T, None, None, None, \
                 None, ts, h_scale, s_scale, fixed, label)
@@ -168,12 +153,12 @@ class Harmonic(_Thermo):
                 self.freqs[nimag:],
                 electronicenergy=self.e_elec,
                 )
-        self.nsites = nsites
+        self.coord = coord
     def copy(self):
         return self.__class__(self.outcar, self.T, self.ts)
 
 class Shomate(_Thermo):
-    def __init__(self, label, elements, shomatepars, gas, T, nsites=1):
+    def __init__(self, label, elements, shomatepars, gas, T, coord=1):
         self.label = label
         self.elements = elements
         self.shomatepars = shomatepars
@@ -186,7 +171,7 @@ class Shomate(_Thermo):
         self.G = shomatepars[6]
         self.T = T
         self.gas = gas
-        self.nsites = nsites
+        self.coord = coord
     def get_enthalpy(self, T=None):
         if T is None:
             T = self.T
@@ -242,22 +227,15 @@ class _Reactants(object):
             else:
                 raise NotImplementedError
     def get_enthalpy(self, T=None):
-        H = 0.
-        for species in self.species:
-            H += species.get_enthalpy(T)
-        return H
+        return sum([species.get_enthalpy(T) for species in self.species])
     def get_entropy(self, T=None, P=None):
-        S = 0.
-        for species in self.species:
-            S += species.get_entropy(T, P)
-        return S
+        return sum([species.get_entropy(T, P) for species in self.species])
+    def get_energy(self):
+        return sum([species.get_energy() for species in self.species])
     def copy(self):
         return self.__class__(self.species)
     def get_mass(self):
-        mass = 0
-        for species in self.species:
-            mass += species.atoms.get_masses().sum()
-        return mass
+        return sum([species.atoms.get_masses().sum() for species in self.species])
     def __iadd__(self, other):
         if isinstance(other, _Reactants):
             self.species += other.species
@@ -280,8 +258,7 @@ class _Reactants(object):
         new += other
         return new
     def __imul__(self, factor):
-        if not isinstance(factor, int):
-            raise NotImplementedError
+        raise ValueError, "Reactants can only be multiplied by an integer"
         self.species *= factor
         for key in self.elements:
             self.elements[key] *= factor
@@ -292,12 +269,7 @@ class _Reactants(object):
     def __rmul__(self, factor):
         return self.__mul__(factor)
     def __repr__(self):
-        string = ''
-        for species in self.species:
-            if string:
-                string += ' + '
-            string += species.__repr__()
-        return string
+        return ' + '.join([species.__repr__() for species in self.species])
     def __getitem__(self, i):
         return self.species[i]
     def __getslice__(self, i, j):
