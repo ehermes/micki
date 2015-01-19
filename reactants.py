@@ -16,11 +16,12 @@ class _Thermo(object):
     """Generic thermodynamics object"""
     def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
             spin=0., ts=False, h_scale=1.0, s_scale=1.0, fixed=False, label=None, \
-            eref=None):
+            eref=None, metal=None):
         self.outcar = outcar
         self.atoms = read(self.outcar, index=0)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
         self.atoms.set_masses(self.mass)
+        self.metal = metal
         self._read_hess()
         self.T = T
         self.P = P
@@ -124,6 +125,26 @@ class _Thermo(object):
                 elif hessblock == 3:
                     break
 
+        # Temporary work around: My test system OUTCARs include some
+        # metal atoms in the hessian, this seems to cause some problems
+        # with the MKM. So, here I'm taking only the non-metal part
+        # of the hessian and diagonalizing that.
+        nonmetal = []
+        for i, j in enumerate(index):
+            if self.atoms[j].symbol != self.metal:
+                nonmetal.append(i)
+        if not nonmetal:
+            self.freqs = np.array([])
+            return
+        newhess = np.zeros((len(nonmetal), len(nonmetal)))
+        newindex = np.zeros(len(nonmetal), dtype=int)
+        for i, a in enumerate(nonmetal):
+            newindex[i] = index[a]
+            for j, b in enumerate(nonmetal):
+                newhess[i, j] = self.hess[a, b]
+        self.hess = newhess
+        index = newindex
+
         self.hess = -(self.hess + self.hess.T) / 2.
         mass = np.array([self.atoms[i].mass for i in index], dtype=float)
         self.hess /= np.sqrt(np.outer(mass, mass))
@@ -174,7 +195,7 @@ class IdealGas(_Thermo):
             spin=0., D=None, h_scale=1.0, s_scale=1.0, fixed=True, label=None, \
             eref=None):
         super(IdealGas, self).__init__(outcar, T, P, linear, symm, \
-                spin, False, h_scale, s_scale, fixed, label, eref)
+                spin, False, h_scale, s_scale, fixed, label, eref, None)
         self.gas = True
         self.D = D
         assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
@@ -226,9 +247,9 @@ class IdealGas(_Thermo):
 
 class Harmonic(_Thermo):
     def __init__(self, outcar, T=298.15, ts=False, coord=1, h_scale=1.0, \
-            s_scale=1.0, fixed=False, label=None, eref=None, spin=0.):
+            s_scale=1.0, fixed=False, label=None, eref=None, spin=0., metal=None):
         super(Harmonic, self).__init__(outcar, T, None, None, None, \
-                spin, ts, h_scale, s_scale, fixed, label, eref)
+                spin, ts, h_scale, s_scale, fixed, label, eref, metal)
         self.gas = False
         nimag = 1 if ts else 0
         assert np.all(self.freqs[nimag:] > 0), "Imaginary frequencies found!"
