@@ -1,10 +1,15 @@
-#!/usr/bin/env python
+"""Microkinetic modeling objects"""
 
 import numpy as np
+
 from ase.units import kB, _hplanck, kg, _k, _Nav
+
 from odespy import Radau5Implicit
+
 import sympy as sym
+
 from mkm.reactants import _Thermo, _Reactants
+
 
 class Reaction(object):
     def __init__(self, reactants, products, ts=None, method=None, S0=1., \
@@ -45,16 +50,19 @@ class Reaction(object):
         self.ds_scale = ds_scale
         self.dh_act_scale = dh_act_scale
         self.ds_act_scale = ds_act_scale
+
     def get_keq(self, T):
         # Keq = e^(DS/kB - DH/(kB * T))
-        self.ds = self.products.get_entropy(T) \
-                - self.reactants.get_entropy(T)
-        self.dh = self.products.get_enthalpy(T) \
-                - self.reactants.get_enthalpy(T)
-        self.dh *= self.dh_scale
-        self.ds *= self.ds_scale
-        self.keq = np.exp(self.ds/kB - self.dh/(kB * T))
+        self.keq = self.products.get_q(T) / self.reactants.get_q(T)
+#        self.ds = self.products.get_entropy(T) \
+#                - self.reactants.get_entropy(T)
+#        self.dh = self.products.get_enthalpy(T) \
+#                - self.reactants.get_enthalpy(T)
+#        self.dh *= self.dh_scale
+#        self.ds *= self.ds_scale
+#        self.keq = np.exp(self.ds/kB - self.dh/(kB * T))
         return self.keq
+
     def get_kfor(self, T, N0):
         if self.ts is None:
             if self.method is None:
@@ -70,31 +78,36 @@ class Reaction(object):
                         / (2 * np.pi * self.reactants.get_mass()))
         else:
             # Transition State Theory:
-            # kfor = (kB * T / h) * e^(DS_act/kB - DH_act/(kB * T))
-            self.ds_act = self.ts.get_entropy(T) \
-                    - self.reactants.get_entropy(T)
-            self.dh_act = self.ts.get_enthalpy(T) \
-                    - self.reactants.get_enthalpy(T)
-            self.ds_act *= self.ds_act_scale
-            self.dh_act *= self.dh_act_scale
-            self.kfor = (_k * T / _hplanck) * np.exp(self.ds_act / kB) \
-                    * np.exp(-self.dh_act / (kB * T))
+#            # kfor = (kB * T / h) * e^(DS_act/kB - DH_act/(kB * T))
+#            self.ds_act = self.ts.get_entropy(T) \
+#                    - self.reactants.get_entropy(T)
+#            self.dh_act = self.ts.get_enthalpy(T) \
+#                    - self.reactants.get_enthalpy(T)
+#            self.ds_act *= self.ds_act_scale
+#            self.dh_act *= self.dh_act_scale
+#            self.kfor = (_k * T / _hplanck) * np.exp(self.ds_act / kB) \
+#                    * np.exp(-self.dh_act / (kB * T))
+            self.kfor = (_k * T / _hplanck) * self.ts.get_q(T) / self.reactants.get_q(T)
         return self.kfor
+
     def get_krev(self, T, N0):
-        keq = self.get_keq(T)
-        if (self.ts is None) and (self.method is None):
-#            self.krev = 1e13
+        if self.ts is None:
+            keq = self.get_keq(T)
+#            if self.method is None:
+#               self.krev = 1e13
             self.krev = _k * T / _hplanck
             if keq > 1:
                 self.krev /= keq
-        elif self.method == 'CT':
-            self.de = self.products.get_energy() - self.reactants.get_energy()
-#            self.krev = 1e13 * np.exp(-self.de / (kB * T))
-            self.krev = (_k * T / _hplanck) * np.exp(self.de / (kB * T))
+#            elif self.method == 'CT':
+#                self.de = self.products.get_energy() - self.reactants.get_energy()
+#                self.krev = (_k * T / _hplanck) * np.exp(self.de / (kB * T))
+#            else:
+#                kfor = self.get_kfor(T, N0)
+#                self.krev = kfor / keq
         else:
-            kfor = self.get_kfor(T, N0)
-            self.krev = kfor / keq
+            self.krev = (_k * T / _hplanck) * self.ts.get_q(T) / self.products.get_q(T)
         return self.krev
+
     def set_scale(self, dh=None, ds=None, dh_act=None, ds_act=None):
         if dh is not None:
             self.dh_scale = dh
@@ -104,12 +117,14 @@ class Reaction(object):
             self.dh_act_scale = dh_act
         if ds_act is not None:
             self.ds_act_scale = ds_act
+
     def __repr__(self):
         string = self.reactants.__repr__() + ' <-> '
         if self.ts is not None:
             string += self.ts.__repr__() + ' <-> '
         string += self.products.__repr__()
         return string
+
 
 class Model(object):
     def __init__(self, reactions, T, V, nsites):
@@ -125,15 +140,18 @@ class Model(object):
         self.T = T
         self.V = V
         self.nsites = nsites
+
     def add_reaction(self, reaction):
         assert isinstance(reaction, Reaction)
         self.reactions.append(reaction)
         for species in reaction.reactants:
             self.add_species(species)
+
     def add_species(self, species):
         assert isinstance(species, _Thermo)
         if species not in self.species:
             self.species.append(species)
+
     def set_vacancy(self, species, N0):
         assert species.gas is False
         if species not in self.species:
@@ -151,6 +169,7 @@ class Model(object):
         newspecies.append(self.vacancy)
         self.species = newspecies
         self.N0 = N0
+
     def set_initial_conditions(self, U0):
         self.U0 = []
         for species in U0:
@@ -162,8 +181,10 @@ class Model(object):
             else:
                 self.U0.append(0.)
         self._initialize()
+
     def _initialize(self):
         raise NotImplementedError
+
     def _rate_calc(self):
         self.rates = []
         self.rate_count = []
@@ -179,22 +200,27 @@ class Model(object):
                 rate_count[species] += 1
             self.rates.append(rate_for - rate_rev)
             self.rate_count.append(rate_count)
+
     def f(self, x, t):
         y = np.zeros_like(self.f_exec, dtype=float)
         for i in xrange(len(self.symbols)):
             y[i] = self.f_exec[i](*x)
         return y
+
     def jac(self, x, t):
         y = np.zeros_like(self.jac_exec, dtype=float)
         for i in xrange(len(self.symbols)):
             for j in xrange(len(self.symbols)):
                 y[i, j] = self.jac_exec[i][j](*x)
         return y
+
     def mas(self):
         return self.M
+
     def solve(self, t):
         self.U1, self.t = self.model.solve(t)
         return self._results()
+
     def _results(self):
         self.U =[]
         for i, t in enumerate(self.t):
@@ -205,10 +231,10 @@ class Model(object):
         return self.U, self.t
 
 
-
 class GasPhaseModel(Model):
     def __init__(self, reactions, T, V, nsites):
         super(GasPhaseModel, self).__init__(reactions, T, V, nsites)
+
     def _initialize(self):
         # Initialize the mass matrix
         self.M = np.identity(len(self.species), dtype=int)
@@ -253,6 +279,7 @@ class GasPhaseModel(Model):
                 rtol=1e-8)
         self.model.set_initial_condition(self.U0)
 
+
 class LiquidPhaseModel(Model):
     def __init__(self, reactions, T, V, nsites, z, dz):
         self.z = z
@@ -260,6 +287,7 @@ class LiquidPhaseModel(Model):
         self.nz = int(np.ceil(self.z/self.dz))
         assert self.nz >= 3, "Grid too coarse! Increase z or decrease dz."
         super(LiquidPhaseModel, self).__init__(reactions, T, V, nsites)
+
     def set_initial_conditions(self, U0):
         self.U0 = []
         for species in U0:
@@ -276,6 +304,7 @@ class LiquidPhaseModel(Model):
             else:
                 self.U0.append(U0i)
         self._initialize()
+
     def _initialize(self):
         size = (self.nz - 1) * self.ngas + len(self.species)
         self.M = np.identity(size, dtype=int)
@@ -348,6 +377,7 @@ class LiquidPhaseModel(Model):
         self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
                 rtol=1e-8)
         self.model.set_initial_condition(self.U0)
+
     def _results(self):
         self.U =[]
         for i, t in enumerate(self.t):
