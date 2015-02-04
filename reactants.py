@@ -34,15 +34,17 @@ class _Thermo(object):
         self.s_scale = s_scale
         self.fixed = fixed
         self.label = label
+        self.q = None
 
         if eref is not None:
             for symbol in self.atoms.get_chemical_symbols():
                 self.e_elec -= eref[symbol]
 
     def update(self, T=None, P=None):
-        if T is None or T == self.T:
-            if P is None or P == self.P:
-                return
+        if self.q is not None:
+            if T is None or T == self.T:
+                if P is None or P == self.P:
+                    return
 
         if T is None:
             T = self.T

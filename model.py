@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from ase.units import kB, _hplanck, kg, _k, _Nav
+from ase.units import kB, _hplanck, kg, _k, _Nav, mol
 
 from odespy import Radau5Implicit
 
@@ -34,12 +34,12 @@ class Reaction(object):
                 self.ts = ts
             else:
                 raise NotImplementedError
-        # Mass balance requires that each element in the reactant is preserved
-        # in the product and in any transition states.
-        for element in self.reactants.elements:
-            assert self.reactants.elements[element] == self.products.elements[element]
-            if self.ts is not None:
-                assert self.reactants.elements[element] == self.ts.elements[element]
+#        # Mass balance requires that each element in the reactant is preserved
+#        # in the product and in any transition states.
+#        for element in self.reactants.elements:
+#            assert self.reactants.elements[element] == self.products.elements[element]
+#            if self.ts is not None:
+#                assert self.reactants.elements[element] == self.ts.elements[element]
         self.method = method
         if isinstance(self.method, str):
             self.method =self.method.upper()
@@ -50,63 +50,66 @@ class Reaction(object):
         self.ds_scale = ds_scale
         self.dh_act_scale = dh_act_scale
         self.ds_act_scale = ds_act_scale
+        self.keq = None
+        self.kfor = None
+        self.krev = None
+        self.T = None
+        self.N0 = None
+
+    def update(self, T=None, N0=None):
+        if self.keq is not None and self.kfor is not None and self.krev is not None:
+            if T is None or T == self.T:
+                if N0 is None or N0 == self.N0:
+                    return
+
+        self.T = T
+        self.N0 = N0
+        self._calc_keq(T)
+        self._calc_kfor(T, N0)
+        self._calc_krev(T, N0)
 
     def get_keq(self, T):
-        # Keq = e^(DS/kB - DH/(kB * T))
-        self.keq = self.products.get_q(T) / self.reactants.get_q(T)
-#        self.ds = self.products.get_entropy(T) \
-#                - self.reactants.get_entropy(T)
-#        self.dh = self.products.get_enthalpy(T) \
-#                - self.reactants.get_enthalpy(T)
-#        self.dh *= self.dh_scale
-#        self.ds *= self.ds_scale
-#        self.keq = np.exp(self.ds/kB - self.dh/(kB * T))
+        self.update(T)
         return self.keq
 
     def get_kfor(self, T, N0):
-        if self.ts is None:
-            if self.method is None:
-#                self.kfor = 1e13
-                self.kfor = _k * T / _hplanck
-                keq = self.get_keq(T)
-                if keq < 1:
-                    self.kfor *= keq
-            elif self.method == 'CT':
-                # Collision theory:
-                # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
-                self.kfor = (1000 * self.S0 * _Nav/ N0) * np.sqrt(_k * T * kg \
-                        / (2 * np.pi * self.reactants.get_mass()))
-        else:
-            # Transition State Theory:
-#            # kfor = (kB * T / h) * e^(DS_act/kB - DH_act/(kB * T))
-#            self.ds_act = self.ts.get_entropy(T) \
-#                    - self.reactants.get_entropy(T)
-#            self.dh_act = self.ts.get_enthalpy(T) \
-#                    - self.reactants.get_enthalpy(T)
-#            self.ds_act *= self.ds_act_scale
-#            self.dh_act *= self.dh_act_scale
-#            self.kfor = (_k * T / _hplanck) * np.exp(self.ds_act / kB) \
-#                    * np.exp(-self.dh_act / (kB * T))
-            self.kfor = (_k * T / _hplanck) * self.ts.get_q(T) / self.reactants.get_q(T)
+        self.update(T, N0)
         return self.kfor
 
     def get_krev(self, T, N0):
+        self.update(T, N0)
+        return self.krev
+
+    def _calc_keq(self, T):
+        self.keq = self.products.get_q(T) / self.reactants.get_q(T)
+
+    def _calc_kfor(self, T, N0):
         if self.ts is None:
-            keq = self.get_keq(T)
-#            if self.method is None:
-#               self.krev = 1e13
+            if self.method is None:
+                self.kfor = _k * T / _hplanck
+                if self.keq < 1:
+                    self.kfor *= self.keq
+            elif self.method == 'CT':
+                # Collision Theory
+                # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
+                self.kfor = (1000 * self.S0 * _Nav / N0) * np.sqrt(_k * T * kg \
+                        / (2 * np.pi * self.reactants.get_mass()))
+        else:
+            #Transition State Theory
+            self.kfor = (_k * T / _hplanck) * self.ts.get_q(T) / self.reactants.get_q(T)
+
+    def _calc_krev(self, T, N0):
+        if self.ts is None:
             self.krev = _k * T / _hplanck
-            if keq > 1:
-                self.krev /= keq
-#            elif self.method == 'CT':
-#                self.de = self.products.get_energy() - self.reactants.get_energy()
-#                self.krev = (_k * T / _hplanck) * np.exp(self.de / (kB * T))
-#            else:
-#                kfor = self.get_kfor(T, N0)
-#                self.krev = kfor / keq
+            if self.keq > 1:
+                self.krev /= self.keq
+            elif self.method == 'CT':
+                self.de = self.products.get_energy() - self.reactants.get_energy()
+                self.krev = (_k * T / _hplanck) * np.exp(self.de / (kB * T))
+            else:
+                self.krev = self.kfor / self.keq
         else:
             self.krev = (_k * T / _hplanck) * self.ts.get_q(T) / self.products.get_q(T)
-        return self.krev
 
     def set_scale(self, dh=None, ds=None, dh_act=None, ds_act=None):
         if dh is not None:
@@ -127,7 +130,7 @@ class Reaction(object):
 
 
 class Model(object):
-    def __init__(self, reactions, T, V, nsites):
+    def __init__(self, reactions, T, V, nsites, coverage=1.0):
         self.reactions = []
         self.species = []
         for reaction in reactions:
@@ -140,6 +143,7 @@ class Model(object):
         self.T = T
         self.V = V
         self.nsites = nsites
+        self.coverage = coverage
 
     def add_reaction(self, reaction):
         assert isinstance(reaction, Reaction)
@@ -232,9 +236,6 @@ class Model(object):
 
 
 class GasPhaseModel(Model):
-    def __init__(self, reactions, T, V, nsites):
-        super(GasPhaseModel, self).__init__(reactions, T, V, nsites)
-
     def _initialize(self):
         # Initialize the mass matrix
         self.M = np.identity(len(self.species), dtype=int)
@@ -281,12 +282,26 @@ class GasPhaseModel(Model):
 
 
 class LiquidPhaseModel(Model):
-    def __init__(self, reactions, T, V, nsites, z, dz):
+    def __init__(self, reactions, T, V, nsites, z, nz, shape='FLAT', coverage=1.0):
         self.z = z
-        self.dz = dz
-        self.nz = int(np.ceil(self.z/self.dz))
-        assert self.nz >= 3, "Grid too coarse! Increase z or decrease dz."
-        super(LiquidPhaseModel, self).__init__(reactions, T, V, nsites)
+        self.nz = nz
+        self.shape = shape
+        assert self.nz >= 3, "Too few grid points!"
+        if self.shape.upper() == 'FLAT':
+            self.dz = np.ones(self.nz - 1, dtype=float)
+        elif self.shape.upper() == 'GAUSSIAN':
+            self.dz = 1. / (np.exp(10 * (0.5 - np.arange(self.nz - 1, dtype=float) \
+                    / (self.nz - 2))) + 1.)
+        elif self.shape.upper() == 'EXP':
+            self.dz = np.exp(7. * np.arange(self.nz - 1, dtype=float) / (self.nz - 2))
+        self.dz *= self.z / self.dz.sum()
+        self.zi = np.zeros(self.nz, dtype=float)
+        for i in xrange(nz):
+            if i < self.nz - 1:
+                self.zi[i] += self.dz[i]/2.
+                if i > 0:
+                    self.zi[i] += self.dz[i-1]/2.
+        super(LiquidPhaseModel, self).__init__(reactions, T, V, nsites, coverage)
 
     def set_initial_conditions(self, U0):
         self.U0 = []
@@ -308,7 +323,11 @@ class LiquidPhaseModel(Model):
     def _initialize(self):
         size = (self.nz - 1) * self.ngas + len(self.species)
         self.M = np.identity(size, dtype=int)
-        self.M[-1, -1] = 0.
+        self.M[-1, -1] = 0
+#        self.M[0, 0] = 0
+#        self.M = np.zeros((size, size), dtype=int)
+#        self.M[0, 0] = 1
+#        self.M[-2, -2] = 1
         self.symbols = sym.symbols('x0:{}'.format(size))
         self.symbols_dict = {}
         j = 0
@@ -321,42 +340,39 @@ class LiquidPhaseModel(Model):
             else:
                 self.symbols_dict[species] = self.symbols[j]
                 j += 1
-        self.dV = self.N0 * self.dz # Volume of grid thickness per ads. site
+
+        # Volume of grid thickness per ads. site
+        self.dV = mol * self.zi * self.nsites * 1000 / (self.N0 * self.coverage)
+        self.dV[-1] = self.V - self.dV.sum()
+        self.zi[-1] = self.N0 * self.coverage * self.dV[-1] / (1000 * mol * self.nsites)
+        self.dz = list(self.dz)
+        self.dz.append(2 * self.zi[-1] - self.dz[-2])
+        self.dz = np.array(self.dz)
         self._rate_calc()
         self.f_sym = []
         self.f_exec = []
         for species in self.species:
-            f = 0
             if species.gas:
                 for i in xrange(self.nz):
                     f = 0
+                    diff = 2 * species.D / self.zi[i]
+                    if i > 0:
+                        if not (i == self.nz - 1 and species.fixed):
+                            f += diff * (self.symbols_dict[(species, i-1)] \
+                                    - self.symbols_dict[(species, i)]) / self.dz[i-1]
+                    if i < self.nz - 1:
+                        f += diff * (self.symbols_dict[(species, i+1)] \
+                                - self.symbols_dict[(species, i)]) / self.dz[i]
                     if i == 0:
-                        f += (species.D / self.dz**2) \
-                                * (self.symbols_dict[(species, i + 1)] \
-                                - self.symbols_dict[(species, i)])
                         for j, rate in enumerate(self.rates):
-                            f += self.rate_count[j][species] * rate * self.nsites / self.V
-                    elif i == self.nz - 2:
-                        f += (species.D / self.dz**2) \
-                                * (self.symbols_dict[(species, i + 1)] \
-                                - 2 * self.symbols_dict[(species, i)] \
-                                + self.symbols_dict[(species, i - 1)])
-                    elif i == self.nz - 1:
-                        if not species.fixed:
-                            f += (species.D  * self.dV / (self.dz**2 * self.V)) \
-                                    * (-self.symbols_dict[(species, i)] \
-                                    + self.symbols_dict[(species, i - 1)])
-
-                    else:
-                        f += (species.D / self.dz**2) \
-                                * (self.symbols_dict[(species, i + 1)] \
-                                - 2 * self.symbols_dict[(species, i)] \
-                                + self.symbols_dict[(species, i - 1)])
+                            f += self.rate_count[j][species] * rate * self.nsites \
+                                    / self.dV[0]
                     self.f_sym.append(f)
                     self.f_exec.append(sym.lambdify(self.symbols, f))
                 else:
                     continue
             elif species is not self.vacancy:
+                f = 0
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
             else:
@@ -394,3 +410,84 @@ class LiquidPhaseModel(Model):
             self.U.append(Ui)
         return self.U, self.t
 
+class DummyDiffusionModel(Model):
+    def __init__(self, species, V, z, nz, shape='FLAT'):
+        self.reactions = []
+        self.species = [species]
+        self.V = V
+        self.z = z
+        self.nz = nz
+        assert self.nz >= 3, "Too few grid points!"
+        if shape.upper() == 'FLAT':
+            self.dz = np.ones(self.nz) * self.z / self.nz
+        elif shape.upper() == 'GAUSSIAN':
+            self.dz = self._gauss(np.arange(self.nz) * self.z / (self.nz - 1), \
+                    self.z, self.z/10.)
+            self.dz *= self.z / self.dz.sum()
+        elif shape.upper() == 'EXP':
+            self.dz = np.exp(7. * np.arange(self.nz) / (self.nz - 1))
+            self.dz *= self.z / self.dz.sum()
+        self.dV = self.V * self.dz / self.z
+
+    def _gauss(self, x, xmax, sigma):
+        return 1. / (np.exp((xmax/2. - x)/sigma) + 1.)
+
+    def set_initial_conditions(self, U0):
+        self.U0 = []
+        assert len(U0) == 1
+        assert self.species[0] in U0
+        self.U0.append(U0[self.species[0]])
+        for i in xrange(self.nz - 1):
+            self.U0.append(0.)
+        self._initialize()
+
+    def _initialize(self):
+        species = self.species[0]
+        size = self.nz
+        self.M = np.identity(size, dtype=int)
+        self.M[-1, -1] = 0
+        self.symbols = sym.symbols('x0:{}'.format(size))
+        self.symbols_dict = {}
+        for i in xrange(self.nz):
+            self.symbols_dict[(species, i)] = self.symbols[i]
+
+        self.f_sym = []
+        self.f_exec = []
+        for i in xrange(self.nz):
+            Si = self.symbols_dict[(species, i)]
+            f = 0
+            diff = 2 * species.D
+            if i == 0:
+                diff /= self.dz[i]
+            else:
+                diff /= self.dz[i-1] + self.dz[i]
+            if i > 0:
+                if not (i == self.nz - 1 and species.fixed):
+                    f += diff * (self.symbols_dict[(species, i-1)] \
+                            - self.symbols_dict[(species, i)]) / self.dz[i-1]
+            if i < self.nz - 1:
+                f += diff * (self.symbols_dict[(species, i+1)] \
+                        - self.symbols_dict[(species, i)]) / self.dz[i]
+            self.f_sym.append(f)
+            self.f_exec.append(sym.lambdify(self.symbols, f))
+
+        self.jac_exec = []
+        for f in self.f_sym:
+            jac_exec = []
+            for symbol in self.symbols:
+                jac_exec.append(sym.lambdify(self.symbols, sym.diff(f, \
+                        symbol)))
+            self.jac_exec.append(jac_exec)
+        self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
+                rtol=1e-10)
+        self.model.set_initial_condition(self.U0)
+
+    def _results(self):
+        self.U =[]
+        for i, t in enumerate(self.t):
+            Ui = {}
+            for j in xrange(self.nz):
+                Ui[j] = self.U1[i][j]
+                j += 1
+            self.U.append(Ui)
+        return self.U, self.t
