@@ -25,7 +25,7 @@ class _Thermo(object):
         self._read_hess()
         self.T = T
         self.P = P
-        self.geometry = 'linear' if linear else 'nonlinear'
+        self.linear = linear
         self.e_elec = self.atoms.get_potential_energy()
         self.symm = symm
         self.spin = spin
@@ -203,7 +203,7 @@ class IdealGas(_Thermo):
         assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
         self.thermo = IdealGasThermo(
                 self.freqs[6:],
-                self.geometry,
+                'linear' if self.linear else 'nonlinear',
                 electronicenergy=self.e_elec,
                 symmetrynumber=self.symm,
                 spin=self.spin,
@@ -226,7 +226,7 @@ class IdealGas(_Thermo):
         # is (currently) being used. By omitting it here, we do not have to 
         # make a choice of standard state.
         qtrans = (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.)
-        if self.geometry == 'linear':
+        if self.linear:
             I = 0
             for atom in self.atoms:
                 I += atom.mass * np.linalg.norm(atom.position - com)**2
@@ -242,8 +242,7 @@ class IdealGas(_Thermo):
         self.q = qtrans * qrot * qvib * qelec
 
     def copy(self):
-        linear = True if self.geometry == 'linear' else False
-        return self.__class__(self.outcar, self.T, self.P, linear, \
+        return self.__class__(self.outcar, self.T, self.P, self.linear, \
                 self.symm, self.spin)
 
 
