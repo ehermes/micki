@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from scipy.integrate import odeint
+
 from ase.units import kB, _hplanck, kg, _k, _Nav, mol
 
 from odespy import Radau5Implicit
@@ -103,9 +105,6 @@ class Reaction(object):
             self.krev = _k * T / _hplanck
             if self.keq > 1:
                 self.krev /= self.keq
-            elif self.method == 'CT':
-                self.de = self.products.get_energy() - self.reactants.get_energy()
-                self.krev = (_k * T / _hplanck) * np.exp(self.de / (kB * T))
             else:
                 self.krev = self.kfor / self.keq
         else:
@@ -168,7 +167,10 @@ class Model(object):
                 self.ngas += 1
                 newspecies.append(species)
         for species in self.species:
-            if not species.gas and species is not self.vacancy:
+            if not species.gas and not species.transient and species is not self.vacancy:
+                newspecies.append(species)
+        for species in self.species:
+            if not species.gas and species.transient and species is not self.vacancy:
                 newspecies.append(species)
         newspecies.append(self.vacancy)
         self.species = newspecies
@@ -225,6 +227,11 @@ class Model(object):
         self.U1, self.t = self.model.solve(t)
         return self._results()
 
+    def solve_scipy(self, t):
+        self.t = t
+        self.U1 = odeint(self.f, self.U0, t, Dfun=self.jac, rtol=1e-8, mxstep=5000000)
+        return self._results()
+
     def _results(self):
         self.U =[]
         for i, t in enumerate(self.t):
@@ -239,9 +246,8 @@ class GasPhaseModel(Model):
     def _initialize(self):
         # Initialize the mass matrix
         self.M = np.identity(len(self.species), dtype=int)
-        self.M[-1, -1] = 0
         for i, species in enumerate(self.species):
-            if species.fixed:
+            if species.transient or species is self.vacancy:
                 self.M[i, i] = 0
         # Create sympy symbols for creating f and jac
         self.symbols = sym.symbols('x0:{}'.format(len(self.species)))
@@ -323,7 +329,14 @@ class LiquidPhaseModel(Model):
     def _initialize(self):
         size = (self.nz - 1) * self.ngas + len(self.species)
         self.M = np.identity(size, dtype=int)
-        self.M[-1, -1] = 0
+        i = 0
+        for species in self.species:
+            if species.gas:
+                i += self.nz
+            else:
+                if species.transient or species is self.vacancy:
+                    self.M[i, i] = 0
+                i += 1
 #        self.M[0, 0] = 0
 #        self.M = np.zeros((size, size), dtype=int)
 #        self.M[0, 0] = 1

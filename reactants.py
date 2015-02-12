@@ -16,7 +16,7 @@ class _Thermo(object):
     """Generic thermodynamics object"""
     def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
             spin=0., ts=False, h_scale=1.0, s_scale=1.0, fixed=False, label=None, \
-            eref=None, metal=None):
+            eref=None, metal=None, transient=False):
         self.outcar = outcar
         self.atoms = read(self.outcar, index=0)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
@@ -35,6 +35,7 @@ class _Thermo(object):
         self.fixed = fixed
         self.label = label
         self.q = None
+        self.transient = transient
 
         if eref is not None:
             for symbol in self.atoms.get_chemical_symbols():
@@ -168,8 +169,7 @@ class _Thermo(object):
         self.freqs.sort()
 
     def get_qvib(self, T, ncut=0):
-        thetavib = 100 * _c * _hplanck * self.freqs[ncut:] / _k
-        exptheta = np.exp(-thetavib / T)
+        exptheta = np.exp(-100 * _c * _hplanck * self.freqs[ncut:] / (_k * T))
         return np.prod(np.sqrt(exptheta) / (1. - exptheta))
 
     def copy(self):
@@ -197,7 +197,7 @@ class IdealGas(_Thermo):
             spin=0., D=None, h_scale=1.0, s_scale=1.0, fixed=True, label=None, \
             eref=None):
         super(IdealGas, self).__init__(outcar, T, P, linear, symm, \
-                spin, False, h_scale, s_scale, fixed, label, eref, None)
+                spin, False, h_scale, s_scale, fixed, label, eref, None, False)
         self.gas = True
         self.D = D
         assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
@@ -248,9 +248,10 @@ class IdealGas(_Thermo):
 
 class Harmonic(_Thermo):
     def __init__(self, outcar, T=298.15, ts=False, coord=1, h_scale=1.0, \
-            s_scale=1.0, fixed=False, label=None, eref=None, spin=0., metal=None):
+            s_scale=1.0, fixed=False, label=None, eref=None, spin=0., metal=None, \
+            transient=False):
         super(Harmonic, self).__init__(outcar, T, None, None, None, \
-                spin, ts, h_scale, s_scale, fixed, label, eref, metal)
+                spin, ts, h_scale, s_scale, fixed, label, eref, metal, transient)
         self.gas = False
         nimag = 1 if ts else 0
         assert np.all(self.freqs[nimag:] > 0), "Imaginary frequencies found!"
