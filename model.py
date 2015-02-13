@@ -233,12 +233,10 @@ class Model(object):
         return self._results()
 
     def _results(self):
-        self.U =[]
+        self.U = {species: [] for species in self.species}
         for i, t in enumerate(self.t):
-            Ui = {}
             for j, species in enumerate(self.species):
-                Ui[species] = self.U1[i][j]
-            self.U.append(Ui)
+                self.U[species].append(self.U1[i][j])
         return self.U, self.t
 
 
