@@ -303,6 +303,9 @@ class LiquidPhaseModel(Model):
         self.dz *= self.z / self.dz.sum()
         self.zi = np.zeros(self.nz, dtype=float)
         for i in xrange(nz):
+            # We don't calculate the width of the last grid point here,
+            # that is done later to ensure that the sum over all grid points
+            # gives the total system volume.
             if i < self.nz - 1:
                 self.zi[i] += self.dz[i]/2.
                 if i > 0:
@@ -368,7 +371,7 @@ class LiquidPhaseModel(Model):
             if species.gas:
                 for i in xrange(self.nz):
                     f = 0
-                    diff = 2 * species.D / self.zi[i]
+                    diff = species.D / self.zi[i]
                     if i > 0:
                         if not (i == self.nz - 1 and species.fixed):
                             f += diff * (self.symbols_dict[(species, i-1)] \
