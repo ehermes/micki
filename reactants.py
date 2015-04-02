@@ -278,9 +278,6 @@ class _Fluid(_Thermo):
     def get_reference_state(self):
         return self.rho0
 
-    def _calc_q(self, T):
-        raise NotImplementedError
-
     def copy(self):
         return self.__class__(self.outcar, self.linear, self.symm, self.spin, \
                 self.label, self.eref)
@@ -328,7 +325,8 @@ class Adsorbate(_Thermo):
         self.Stot = self.Selec + self.Svib
 
     def copy(self):
-        return self.__class__(self.outcar, self.T, self.ts)
+        return self.__class__(self.outcar, self.spin, self.ts, self.coord, \
+                self.label, self.eref, self.metal)
 
 
 class Shomate(_Thermo):

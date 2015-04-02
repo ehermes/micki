@@ -195,7 +195,6 @@ class Model(object):
                 assert z > 0., "Must specify stagnant layer thickness for diffusion!"
                 self.diffusion = True
                 break
-        self.method = 'Equil' if self.diffusion else 'CT'
 
         # Reorder species such that Liquid -> Gas -> Adsorbate -> Vacancy
         newspecies = []
