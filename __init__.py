@@ -1,3 +1,3 @@
-from mkm.reactants import IdealGas, Harmonic, Shomate
-from mkm.model import Reaction, GasPhaseModel, LiquidPhaseModel, DummyDiffusionModel
+from mkm.reactants import Liquid, Gas, Adsorbate
+from mkm.model import Reaction, Model
 from mkm.eref import EnergyReference

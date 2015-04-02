@@ -10,12 +10,12 @@ from odespy import Radau5Implicit
 
 import sympy as sym
 
-from mkm.reactants import _Thermo, _Reactants
+from mkm.reactants import _Thermo, _Fluid, _Reactants, Gas, Liquid, Adsorbate
 
 
 class Reaction(object):
-    def __init__(self, reactants, products, ts=None, method=None, S0=1., \
-            dh_scale=1.0, ds_scale=1.0, dh_act_scale=1.0, ds_act_scale=1.0):
+    def __init__(self, reactants, products, ts=None, method='EQUIL', S0=1., \
+            adsorption=False):
         if isinstance(reactants, _Thermo):
             self.reactants = _Reactants([reactants])
         elif isinstance(reactants, _Reactants):
@@ -28,6 +28,11 @@ class Reaction(object):
             self.products = products
         else:
             raise NotImplementedError
+        self.species = []
+        for species in self.reactants:
+            self.species.append(species)
+        for species in self.products:
+            self.species.append(species)
         self.ts = None
         if ts is not None:
             if isinstance(ts, _Thermo):
@@ -42,33 +47,69 @@ class Reaction(object):
 #            assert self.reactants.elements[element] == self.products.elements[element]
 #            if self.ts is not None:
 #                assert self.reactants.elements[element] == self.ts.elements[element]
+        self.adsorption = adsorption
         self.method = method
         if isinstance(self.method, str):
             self.method =self.method.upper()
-        if self.method not in [None, 'CT']:
+        if self.adsorption and self.method not in ['EQUIL', 'CT']:
             raise ValueError, "Method {} unrecognized!".format(self.method)
         self.S0 = S0
-        self.dh_scale = dh_scale
-        self.ds_scale = ds_scale
-        self.dh_act_scale = dh_act_scale
-        self.ds_act_scale = ds_act_scale
         self.keq = None
         self.kfor = None
         self.krev = None
         self.T = None
         self.N0 = None
+        self.scale_params=['dH', 'dS', 'dH_act', 'dS_act']
+        self.scale = {}
+        for param in self.scale_params:
+            self.scale[param] = 1.0
+        self.scale_old = self.scale.copy()
+
+    def get_scale(self, param):
+        try:
+            return self.scale[param]
+        except KeyError:
+            print "{} is not a valid scaling parameter name!".format(param)
+            return None
+
+    def set_scale(self, param, value):
+        try:
+            self.scale[param] = value
+        except KeyError:
+            print "{} is not a valid scaling parameter name!".format(param)
 
     def update(self, T=None, N0=None):
-        if self.keq is not None and self.kfor is not None and self.krev is not None:
-            if T is None or T == self.T:
-                if N0 is None or N0 == self.N0:
-                    return
+        if not self.is_update_needed(T, N0):
+            return
 
         self.T = T
         self.N0 = N0
+        self.dH = self.products.get_H(T) - self.reactants.get_H(T)
+        self.dH *= self.scale['dH']
+        self.dS = self.products.get_S(T) - self.reactants.get_S(T)
+        self.dS *= self.scale['dS']
+        if self.ts is not None:
+            self.dH_act = self.ts.get_H(T) - self.reactants.get_H(T)
+            self.dH_act *= self.scale['dH_act']
+            self.dS_act = self.ts.get_S(T) - self.reactants.get_S(T)
+            self.dS_act *= self.scale['dS_act']
         self._calc_keq(T)
         self._calc_kfor(T, N0)
         self._calc_krev(T, N0)
+        self.scale_old = self.scale.copy()
+
+    def is_update_needed(self, T, N0):
+        needed = True
+        while needed:
+            if self.keq is None:
+                break
+            if T is not None and T != self.T:
+                break
+            if np.any([self.scale[param] != self.scale_old[param] \
+                    for param in self.scale_params]):
+                break
+            needed = False
+        return needed
 
     def get_keq(self, T):
         self.update(T)
@@ -83,11 +124,13 @@ class Reaction(object):
         return self.krev
 
     def _calc_keq(self, T):
-        self.keq = self.products.get_q(T) / self.reactants.get_q(T)
+        self.keq = np.exp(-self.dH / (kB * T) + self.dS / kB) \
+                * self.products.get_reference_state() \
+                / self.reactants.get_reference_state()
 
     def _calc_kfor(self, T, N0):
         if self.ts is None:
-            if self.method is None:
+            if self.method == 'EQUIL':
                 self.kfor = _k * T / _hplanck
                 if self.keq < 1:
                     self.kfor *= self.keq
@@ -98,7 +141,9 @@ class Reaction(object):
                         / (2 * np.pi * self.reactants.get_mass()))
         else:
             #Transition State Theory
-            self.kfor = (_k * T / _hplanck) * self.ts.get_q(T) / self.reactants.get_q(T)
+            self.kfor = (_k * T / _hplanck) * np.exp(-self.dH_act / (kB * T) \
+                    + self.dS_act / kB) * self.ts.get_reference_state() \
+                    / self.reactants.get_reference_state()
 
     def _calc_krev(self, T, N0):
         if self.ts is None:
@@ -108,17 +153,7 @@ class Reaction(object):
             else:
                 self.krev = self.kfor / self.keq
         else:
-            self.krev = (_k * T / _hplanck) * self.ts.get_q(T) / self.products.get_q(T)
-
-    def set_scale(self, dh=None, ds=None, dh_act=None, ds_act=None):
-        if dh is not None:
-            self.dh_scale = dh
-        if ds is not None:
-            self.ds_scale = ds
-        if dh_act is not None:
-            self.dh_act_scale = dh_act
-        if ds_act is not None:
-            self.ds_act_scale = ds_act
+            self.krev = self.kfor / self.keq
 
     def __repr__(self):
         string = self.reactants.__repr__() + ' <-> '
@@ -127,73 +162,94 @@ class Reaction(object):
         string += self.products.__repr__()
         return string
 
-
 class Model(object):
-    def __init__(self, reactions, T, V, nsites, coverage=1.0):
+    def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
+            shape='FLAT', steady_state=None, D=None):
+        # Set up list of reactions and species
         self.reactions = []
         self.species = []
         for reaction in reactions:
             assert isinstance(reaction, Reaction)
             self.reactions.append(reaction)
-            for species in reaction.reactants:
+            for species in reaction.species:
                 self.add_species(species)
-            for species in reaction.products:
-                self.add_species(species)
+        self.add_species(vacancy)
+        self.vacancy = vacancy
+
+        self.steady_state = steady_state
+        self.N0 = N0
         self.T = T
         self.V = V
         self.nsites = nsites
         self.coverage = coverage
+        self.z = z
+        self.nz = nz
+        self.shape = shape
+        self.D = D
 
-    def add_reaction(self, reaction):
-        assert isinstance(reaction, Reaction)
-        self.reactions.append(reaction)
-        for species in reaction.reactants:
-            self.add_species(species)
+        # Do we need to consider diffusion?
+        self.diffusion = False
+        for species in self.species:
+            if isinstance(species, Liquid):
+                assert nz > 3, "Must have at least three grid points for diffusion!"
+                assert z > 0., "Must specify stagnant layer thickness for diffusion!"
+                self.diffusion = True
+                break
+        self.method = 'Equil' if self.diffusion else 'CT'
+
+        # Reorder species such that Liquid -> Gas -> Adsorbate -> Vacancy
+        newspecies = []
+        self.nliquid = 0
+        for species in self.species:
+            if isinstance(species, Liquid):
+                assert species in self.D, \
+                        "Specify diffusion constant for {}!".format(species)
+                newspecies.append(species)
+                self.nliquid += 1
+        for species in self.species:
+            if isinstance(species, Gas):
+                newspecies.append(species)
+        for species in self.species:
+            if isinstance(species, Adsorbate):
+                if species not in self.steady_state and species is not self.vacancy:
+                    newspecies.append(species)
+        for species in self.steady_state:
+            newspecies.append(species)
+        newspecies.append(self.vacancy)
+        self.species = newspecies
+
+        # Set up diffusion grid, if necessary
+        if self.diffusion:
+            self.set_up_grid()
 
     def add_species(self, species):
         assert isinstance(species, _Thermo)
         if species not in self.species:
             self.species.append(species)
 
-    def set_vacancy(self, species, N0):
-        assert species.gas is False
-        if species not in self.species:
-            self.species.append(species)
-        self.vacancy = species
-        newspecies = []
-        self.ngas = 0
-        for species in self.species:
-            if species.gas:
-                self.ngas += 1
-                newspecies.append(species)
-        for species in self.species:
-            if not species.gas and not species.transient and species is not self.vacancy:
-                newspecies.append(species)
-        for species in self.species:
-            if not species.gas and species.transient and species is not self.vacancy:
-                newspecies.append(species)
-        newspecies.append(self.vacancy)
-        self.species = newspecies
-        self.N0 = N0
-
-    def set_initial_conditions(self, U0):
-        self.U0 = []
-        for species in U0:
-            if species not in self.species:
-                raise ValueError, "Unknown species!"
-        for species in self.species:
-            if species in U0:
-                self.U0.append(U0[species])
-            else:
-                self.U0.append(0.)
-        self._initialize()
-
-    def _initialize(self):
-        raise NotImplementedError
+    def set_up_grid(self):
+        if self.shape.upper() == 'FLAT':
+            self.dz = np.ones(self.nz - 1, dtype=float)
+        elif self.shape.upper() == 'GAUSSIAN':
+            self.dz = 1. / (np.exp(10 * (0.5 - np.arange(self.nz - 1, dtype=float) \
+                    / (self.nz - 2))) + 1.)
+        elif self.shape.upper() == 'EXP':
+            self.dz = np.exp(7. * np.arange(self.nz - 1, dtype=float) / (self.nz - 2))
+        self.dz *= self.z / self.dz.sum()
+        self.zi = np.zeros(self.nz, dtype=float)
+        for i in xrange(self.nz):
+            # We don't calculate the width of the last grid point here,
+            # that is done later to ensure that the sum over all grid points
+            # gives the total system volume.
+            if i < self.nz - 1:
+                self.zi[i] += self.dz[i]/2.
+                if i > 0:
+                    self.zi[i] += self.dz[i-1]/2.
 
     def _rate_calc(self):
         self.rates = []
         self.rate_count = []
+        self.is_rate_ads = []
         for reaction in self.reactions:
             rate_count = {species:0 for species in self.species}
             rate_for = reaction.get_kfor(self.T, self.N0)
@@ -204,8 +260,32 @@ class Model(object):
             for species in reaction.products:
                 rate_rev *= self.symbols_dict[species]
                 rate_count[species] += 1
+            if reaction.adsorption:
+                for species in reaction.species:
+                    if isinstance(species, Liquid):
+                        rate_count[species] *= self.nsites / self.dV[0]
+                    elif isinstance(species, Gas):
+                        rate_count[species] *= self.nsites / self.V
             self.rates.append(rate_for - rate_rev)
             self.rate_count.append(rate_count)
+            self.is_rate_ads.append(reaction.adsorption)
+
+    def set_initial_conditions(self, U0):
+        self.U0 = []
+        for species in U0:
+            if species not in self.species:
+                raise ValueError, "Unknown species!"
+        for species in self.species:
+            if species in U0:
+                U0i = U0[species]
+            else:
+                U0i = 0.
+            if isinstance(species, Liquid):
+                for i in xrange(self.nz):
+                    self.U0.append(U0i)
+            else:
+                self.U0.append(U0i)
+        self._initialize()
 
     def f(self, x, t):
         y = np.zeros_like(self.f_exec, dtype=float)
@@ -227,126 +307,22 @@ class Model(object):
         self.U1, self.t = self.model.solve(t)
         return self._results()
 
-    def solve_scipy(self, t):
-        self.t = t
-        self.U1 = odeint(self.f, self.U0, t, Dfun=self.jac, rtol=1e-8, mxstep=5000000)
-        return self._results()
-
-    def _results(self):
-        self.U = {species: [] for species in self.species}
-        for i, t in enumerate(self.t):
-            for j, species in enumerate(self.species):
-                self.U[species].append(self.U1[i][j])
-        return self.U, self.t
-
-
-class GasPhaseModel(Model):
     def _initialize(self):
-        # Initialize the mass matrix
-        self.M = np.identity(len(self.species), dtype=int)
-        for i, species in enumerate(self.species):
-            if species.transient or species is self.vacancy:
-                self.M[i, i] = 0
-        # Create sympy symbols for creating f and jac
-        self.symbols = sym.symbols('x0:{}'.format(len(self.species)))
-        self.symbols_dict = {}
-        for i, species in enumerate(self.species):
-            self.symbols_dict[species] = self.symbols[i]
-        # Set up rates
-        self._rate_calc()
-        self.f_sym = []
-        self.f_exec = []
-        for species in self.species:
-            f = 0
-            if species is self.vacancy:
-                f = 1
-                for a in self.species:
-                    if not a.gas:
-                        f -= self.symbols_dict[a] * a.coord
-            elif species.gas:
-                if not species.fixed:
-                    for i, rate in enumerate(self.rates):
-                        f += self.rate_count[i][species] * rate * self.nsites / self.V
-            else:
-                for i, rate in enumerate(self.rates):
-                    f += self.rate_count[i][species] * rate
-            self.f_sym.append(f)
-            self.f_exec.append(sym.lambdify(self.symbols, f))
-
-        self.jac_exec = []
-        for f in self.f_sym:
-            jac_exec = []
-            for species in self.species:
-                jac_exec.append(sym.lambdify(self.symbols, sym.diff(f, \
-                        self.symbols_dict[species])))
-            self.jac_exec.append(jac_exec)
-        self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
-                rtol=1e-8)
-        self.model.set_initial_condition(self.U0)
-
-
-class LiquidPhaseModel(Model):
-    def __init__(self, reactions, T, V, nsites, z, nz, shape='FLAT', coverage=1.0):
-        self.z = z
-        self.nz = nz
-        self.shape = shape
-        assert self.nz >= 3, "Too few grid points!"
-        if self.shape.upper() == 'FLAT':
-            self.dz = np.ones(self.nz - 1, dtype=float)
-        elif self.shape.upper() == 'GAUSSIAN':
-            self.dz = 1. / (np.exp(10 * (0.5 - np.arange(self.nz - 1, dtype=float) \
-                    / (self.nz - 2))) + 1.)
-        elif self.shape.upper() == 'EXP':
-            self.dz = np.exp(7. * np.arange(self.nz - 1, dtype=float) / (self.nz - 2))
-        self.dz *= self.z / self.dz.sum()
-        self.zi = np.zeros(self.nz, dtype=float)
-        for i in xrange(nz):
-            # We don't calculate the width of the last grid point here,
-            # that is done later to ensure that the sum over all grid points
-            # gives the total system volume.
-            if i < self.nz - 1:
-                self.zi[i] += self.dz[i]/2.
-                if i > 0:
-                    self.zi[i] += self.dz[i-1]/2.
-        super(LiquidPhaseModel, self).__init__(reactions, T, V, nsites, coverage)
-
-    def set_initial_conditions(self, U0):
-        self.U0 = []
-        for species in U0:
-            if species not in self.species:
-                raise ValueError, "Unknown species!"
-        for species in self.species:
-            if species in U0:
-                U0i = U0[species]
-            else:
-                U0i = 0.
-            if species.gas:
-                for i in xrange(self.nz):
-                    self.U0.append(U0i)
-            else:
-                self.U0.append(U0i)
-        self._initialize()
-
-    def _initialize(self):
-        size = (self.nz - 1) * self.ngas + len(self.species)
+        size = (self.nz - 1) * self.nliquid + len(self.species)
         self.M = np.identity(size, dtype=int)
         i = 0
         for species in self.species:
-            if species.gas:
+            if isinstance(species, Liquid):
                 i += self.nz
             else:
-                if species.transient or species is self.vacancy:
+                if species in self.steady_state or species is self.vacancy:
                     self.M[i, i] = 0
                 i += 1
-#        self.M[0, 0] = 0
-#        self.M = np.zeros((size, size), dtype=int)
-#        self.M[0, 0] = 1
-#        self.M[-2, -2] = 1
         self.symbols = sym.symbols('x0:{}'.format(size))
         self.symbols_dict = {}
         j = 0
         for species in self.species:
-            if species.gas:
+            if isinstance(species, Liquid):
                 self.symbols_dict[species] = self.symbols[j]
                 for i in xrange(self.nz):
                     self.symbols_dict[(species, i)] = self.symbols[j]
@@ -356,22 +332,24 @@ class LiquidPhaseModel(Model):
                 j += 1
 
         # Volume of grid thickness per ads. site
-        self.dV = mol * self.zi * self.nsites * 1000 / (self.N0 * self.coverage)
-        self.dV[-1] = self.V - self.dV.sum()
-        self.zi[-1] = self.N0 * self.coverage * self.dV[-1] / (1000 * mol * self.nsites)
-        self.dz = list(self.dz)
-        self.dz.append(2 * self.zi[-1] - self.dz[-2])
-        self.dz = np.array(self.dz)
+        if self.diffusion:
+            self.dV = mol * self.zi * self.nsites * 1000 / (self.N0 * self.coverage)
+            self.dV[-1] = self.V - self.dV.sum()
+            self.zi[-1] = self.N0 * self.coverage * self.dV[-1] \
+                    / (1000 * mol * self.nsites)
+            self.dz = list(self.dz)
+            self.dz.append(2 * self.zi[-1] - self.dz[-2])
+            self.dz = np.array(self.dz)
         self._rate_calc()
         self.f_sym = []
         self.f_exec = []
         for species in self.species:
-            if species.gas:
+            if isinstance(species, Liquid):
                 for i in xrange(self.nz):
                     f = 0
-                    diff = species.D / self.zi[i]
+                    diff = self.D[species] / self.zi[i]
                     if i > 0:
-                        if not (i == self.nz - 1 and species.fixed):
+                        if not (i == self.nz - 1 and species not in self.steady_state):
                             f += diff * (self.symbols_dict[(species, i-1)] \
                                     - self.symbols_dict[(species, i)]) / self.dz[i-1]
                     if i < self.nz - 1:
@@ -379,12 +357,16 @@ class LiquidPhaseModel(Model):
                                 - self.symbols_dict[(species, i)]) / self.dz[i]
                     if i == 0:
                         for j, rate in enumerate(self.rates):
-                            f += self.rate_count[j][species] * rate * self.nsites \
-                                    / self.dV[0]
+                            if self.is_rate_ads[j]:
+                                f += self.rate_count[j][species] * rate
                     self.f_sym.append(f)
                     self.f_exec.append(sym.lambdify(self.symbols, f))
                 else:
                     continue
+            elif isinstance(species, Gas):
+                f = 0
+                for j, rate in enumerate(self.rates):
+                    f += self.rate_count[j][species] * rate
             elif species is not self.vacancy:
                 f = 0
                 for i, rate in enumerate(self.rates):
@@ -392,7 +374,7 @@ class LiquidPhaseModel(Model):
             else:
                 f = 1
                 for a in self.species:
-                    if not a.gas:
+                    if not isinstance(a, _Fluid):
                         f -= self.symbols_dict[a] * a.coord
             self.f_sym.append(f)
             self.f_exec.append(sym.lambdify(self.symbols, f))
@@ -409,99 +391,18 @@ class LiquidPhaseModel(Model):
         self.model.set_initial_condition(self.U0)
 
     def _results(self):
-        self.U =[]
+        self.U = []
         for i, t in enumerate(self.t):
             Ui = {}
             j = 0
             for species in self.species:
-                if species.gas:
+                if isinstance(species, Liquid):
                     for k in xrange(self.nz):
                         Ui[(species, k)] = self.U1[i][j]
                         j += 1
+                    Ui[species] = self.U1[i][j-1]
                 else:
                     Ui[species] = self.U1[i][j]
                     j += 1
-            self.U.append(Ui)
-        return self.U, self.t
-
-class DummyDiffusionModel(Model):
-    def __init__(self, species, V, z, nz, shape='FLAT'):
-        self.reactions = []
-        self.species = [species]
-        self.V = V
-        self.z = z
-        self.nz = nz
-        assert self.nz >= 3, "Too few grid points!"
-        if shape.upper() == 'FLAT':
-            self.dz = np.ones(self.nz) * self.z / self.nz
-        elif shape.upper() == 'GAUSSIAN':
-            self.dz = self._gauss(np.arange(self.nz) * self.z / (self.nz - 1), \
-                    self.z, self.z/10.)
-            self.dz *= self.z / self.dz.sum()
-        elif shape.upper() == 'EXP':
-            self.dz = np.exp(7. * np.arange(self.nz) / (self.nz - 1))
-            self.dz *= self.z / self.dz.sum()
-        self.dV = self.V * self.dz / self.z
-
-    def _gauss(self, x, xmax, sigma):
-        return 1. / (np.exp((xmax/2. - x)/sigma) + 1.)
-
-    def set_initial_conditions(self, U0):
-        self.U0 = []
-        assert len(U0) == 1
-        assert self.species[0] in U0
-        self.U0.append(U0[self.species[0]])
-        for i in xrange(self.nz - 1):
-            self.U0.append(0.)
-        self._initialize()
-
-    def _initialize(self):
-        species = self.species[0]
-        size = self.nz
-        self.M = np.identity(size, dtype=int)
-        self.M[-1, -1] = 0
-        self.symbols = sym.symbols('x0:{}'.format(size))
-        self.symbols_dict = {}
-        for i in xrange(self.nz):
-            self.symbols_dict[(species, i)] = self.symbols[i]
-
-        self.f_sym = []
-        self.f_exec = []
-        for i in xrange(self.nz):
-            Si = self.symbols_dict[(species, i)]
-            f = 0
-            diff = 2 * species.D
-            if i == 0:
-                diff /= self.dz[i]
-            else:
-                diff /= self.dz[i-1] + self.dz[i]
-            if i > 0:
-                if not (i == self.nz - 1 and species.fixed):
-                    f += diff * (self.symbols_dict[(species, i-1)] \
-                            - self.symbols_dict[(species, i)]) / self.dz[i-1]
-            if i < self.nz - 1:
-                f += diff * (self.symbols_dict[(species, i+1)] \
-                        - self.symbols_dict[(species, i)]) / self.dz[i]
-            self.f_sym.append(f)
-            self.f_exec.append(sym.lambdify(self.symbols, f))
-
-        self.jac_exec = []
-        for f in self.f_sym:
-            jac_exec = []
-            for symbol in self.symbols:
-                jac_exec.append(sym.lambdify(self.symbols, sym.diff(f, \
-                        symbol)))
-            self.jac_exec.append(jac_exec)
-        self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
-                rtol=1e-10)
-        self.model.set_initial_condition(self.U0)
-
-    def _results(self):
-        self.U =[]
-        for i, t in enumerate(self.t):
-            Ui = {}
-            for j in xrange(self.nz):
-                Ui[j] = self.U1[i][j]
-                j += 1
             self.U.append(Ui)
         return self.U, self.t

@@ -7,79 +7,158 @@ from ase.io import read
 
 from ase.units import J, kJ, mol, _hplanck, m, kg, _k, kB, _c
 
-from ase.thermochemistry import IdealGasThermo, HarmonicThermo
-
 from masses import masses
 
 
 class _Thermo(object):
     """Generic thermodynamics object"""
-    def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
-            spin=0., ts=False, h_scale=1.0, s_scale=1.0, fixed=False, label=None, \
-            eref=None, metal=None, transient=False):
+    def __init__(self, outcar, linear=False, symm=1, spin=0., ts=False, \
+            label=None, eref=None, metal=None):
         self.outcar = outcar
         self.atoms = read(self.outcar, index=0)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
         self.atoms.set_masses(self.mass)
+        self.eref = eref
         self.metal = metal
         self._read_hess()
-        self.T = T
-        self.P = P
+        self.T = None
+        self.potential_energy = self.atoms.get_potential_energy()
         self.linear = linear
-        self.e_elec = self.atoms.get_potential_energy()
         self.symm = symm
         self.spin = spin
         self.ts = ts
-        self.h_scale = h_scale
-        self.s_scale = s_scale
-        self.fixed = fixed
         self.label = label
-        self.q = None
-        self.transient = transient
+        self.qtot = None
+        self.qelec = None
+        self.qtrans2D = None
+        self.qtrans3D = None
+        self.qrot = None
+        self.qvib = None
+        self.Stot = None
+        self.Selec = None
+        self.Strans2D = None
+        self.Strans3D = None
+        self.Srot = None
+        self.Svib = None
+        self.Etot = None
+        self.Eelec = None
+        self.Etrans2D = None
+        self.Etrans3D = None
+        self.Erot = None
+        self.Evib = None
+        self.Htot = None
 
-        if eref is not None:
+        self.scale = {}
+        self.scale_params = ['Stot', 'Selec', 'Strans2D', 'Strans3D', 'Srot', 'Svib', \
+                'Etot', 'Eelec', 'Etrans2D', 'Etrans3D', 'Erot', 'Evib', 'Htot']
+        for param in self.scale_params:
+            self.scale[param] = 1.0
+        self.scale_old = self.scale.copy()
+
+        if self.eref is not None:
             for symbol in self.atoms.get_chemical_symbols():
-                self.e_elec -= eref[symbol]
+                self.potential_energy -= self.eref[symbol]
 
-    def update(self, T=None, P=None):
-        if self.q is not None:
-            if T is None or T == self.T:
-                if P is None or P == self.P:
-                    return
+    def update(self, T=None):
+        if not self.is_update_needed(T):
+            return
 
         if T is None:
             T = self.T
-        if P is None:
-            P = self.P
 
         self.T = T
-        self._calc_enthalpy(T)
-        self._calc_entropy(T, P)
         self._calc_q(T)
+        self.scale_old = self.scale.copy()
 
-    def get_enthalpy(self, T=None):
+    def is_update_needed(self, T):
+        needed = True
+        while needed:
+            if self.qtot is None:
+                break
+            if T is not None and T != self.T:
+                break
+            if np.any([self.scale[param] != self.scale_old[param] \
+                    for param in self.scale_params]):
+                break
+            needed = False
+        return needed
+
+    def get_H(self, T=None):
         self.update(T)
-        return self.enthalpy
+        return self.Htot * self.scale['Htot']
 
-    def get_entropy(self, T=None, P=None):
+    def get_S(self, T=None):
         self.update(T)
-        return self.entropy
+        return self.Stot * self.scale['Stot']
 
-    def get_energy(self):
-        return self.e_elec
+    def get_E(self, T=None):
+        self.update(T)
+        return self.Etot * self.scale['Etot']
 
     def get_q(self, T=None):
         self.update(T)
-        return self.q
+        return self.qtot
+
+    def get_reference_state(self):
+        raise NotImplementedError
+
+    def get_scale(self, param):
+        try:
+            return self.scale[param]
+        except KeyError:
+            print "{} is not a valid scaling parameter name!".format(param)
+            return None
+
+    def set_scale(self, param, value):
+        try:
+            self.scale[param] = value
+        except KeyError:
+            print "{} is not a valid scaling parameter name!".format(param)
 
     def _calc_q(self, T):
         raise NotImplementedError
 
-    def _calc_enthalpy(self, T):
-        raise NotImplementedError
+    def _calc_qtrans2D(self, T):
+        mtot = sum(self.mass) / kg
+        self.qtrans2D = 2 * np.pi * mtot * _k * T / _hplanck**2 / self.rho0
+        self.Etrans2D = kB * T * self.scale['Etrans2D']
+        self.Strans2D = kB * (2 + np.log(self.qtrans2D)) * self.scale['Strans2D']
 
-    def _calc_entropy(self, T, P):
-        raise NotImplementedError
+    def _calc_qtrans3D(self, T):
+        mtot = sum(self.mass) / kg
+        self.qtrans3D = (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.) / self.rho0
+        self.Etrans3D = 3. * kB * T / 2. * self.scale['Etrans3D']
+        self.Strans3D = kB * (5./2. + np.log(self.qtrans3D)) * self.scale['Strans3D']
+
+    def _calc_qrot(self, T):
+        com = self.atoms.get_center_of_mass()
+        if self.linear:
+            I = 0
+            for atom in self.atoms:
+                I += atom.mass * np.linalg.norm(atom.position - com)**2
+            I /= (kg * m**2)
+            self.qrot = 8 * np.pi**2 * I * _k * T / (_hplanck**2 * self.symm)
+            self.Erot = kB * T * self.scale['Erot']
+            self.Srot = kB * (1. + np.log(self.qrot)) * self.scale['Srot']
+        else:
+            I = self.atoms.get_moments_of_inertia() / (kg * m**2)
+            thetarot = _hplanck**2 / (8 * np.pi**2 * I * _k)
+            self.qrot = np.sqrt(np.pi * T**3 / np.prod(thetarot)) / self.symm
+            self.Erot = 3. * kB * T / 2. * self.scale['Erot']
+            self.Srot = kB * (3./2. + np.log(self.qrot)) * self.scale['Srot']
+
+    def _calc_qvib(self, T, ncut=0):
+        thetavib =100 * _c * _hplanck * self.freqs[ncut:] / _k
+        self.qvib = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
+        self.Evib = kB * sum(thetavib * (1./2. + 1./(np.exp(thetavib/T) - 1.))) \
+                * self.scale['Evib']
+        self.Svib = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) \
+                - np.log(1. - np.exp(-thetavib/T))) * self.scale['Svib']
+
+    def _calc_qelec(self, T):
+        self.qelec = 2. * self.spin + 1. * np.exp(-self.potential_energy / (_k * T))
+        self.Eelec = self.potential_energy * self.scale['Eelec']
+        self.Selec = kB * np.log(2. * self.spin + 1.) * self.scale['Selec']
 
     def _read_hess(self):
         # This reads the hessian from the OUTCAR and diagonalizes it
@@ -168,10 +247,6 @@ class _Thermo(object):
                 self.freqs[i] = -val.imag
         self.freqs.sort()
 
-    def get_qvib(self, T, ncut=0):
-        exptheta = np.exp(-100 * _c * _hplanck * self.freqs[ncut:] / (_k * T))
-        return np.prod(np.sqrt(exptheta) / (1. - exptheta))
-
     def copy(self):
         raise NotImplementedError
 
@@ -192,129 +267,112 @@ class _Thermo(object):
         return self.__mul__(factor)
 
 
-class IdealGas(_Thermo):
-    def __init__(self, outcar, T=298.15, P=101325, linear=False, symm=1, \
-            spin=0., D=None, h_scale=1.0, s_scale=1.0, fixed=True, label=None, \
-            eref=None):
-        super(IdealGas, self).__init__(outcar, T, P, linear, symm, \
-                spin, False, h_scale, s_scale, fixed, label, eref, None, False)
-        self.gas = True
-        self.D = D
+class _Fluid(_Thermo):
+    def __init__(self, outcar, linear=False, symm=1, spin=0., \
+            label=None, eref=None, rhoref=1.):
+        super(_Fluid, self).__init__(outcar, linear, symm, \
+                spin, False, label, eref, None)
+        self.rho0 = rhoref
         assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
-        self.thermo = IdealGasThermo(
-                self.freqs[6:],
-                'linear' if self.linear else 'nonlinear',
-                electronicenergy=self.e_elec,
-                symmetrynumber=self.symm,
-                spin=self.spin,
-                atoms=self.atoms,
-                )
 
-    def _calc_enthalpy(self, T):
-        self.enthalpy = self.thermo.get_enthalpy(T, verbose=False) * self.h_scale
-
-    def _calc_entropy(self, T, P):
-        self.entropy = self.thermo.get_entropy(T, P, verbose=False) * self.s_scale
+    def get_reference_state(self):
+        return self.rho0
 
     def _calc_q(self, T):
-        mtot = sum(self.mass) / kg
-        com = self.atoms.get_center_of_mass()
-        # Note that the translational partition function includes a factor
-        # of V (volume) or kT/P (pressure) that is being left out here. That 
-        # is because it cancels out with a factor of 1/V in the equilibrium 
-        # coefficient, which is the only place that this partition function 
-        # is (currently) being used. By omitting it here, we do not have to 
-        # make a choice of standard state.
-        qtrans = (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.)
-        if self.linear:
-            I = 0
-            for atom in self.atoms:
-                I += atom.mass * np.linalg.norm(atom.position - com)**2
-            I /= (kg * m**2)
-            thetarot = _hplanck**2 / (8 * np.pi**2 * I * _k)
-            qrot = (T / thetarot) / self.symm
-        else:
-            I = self.atoms.get_moments_of_inertia() / (kg * m**2)
-            thetarot = _hplanck**2 / (8 * np.pi**2 * I * _k)
-            qrot = np.sqrt(np.pi * T**3 / np.prod(thetarot)) / self.symm
-        qvib = self.get_qvib(T, ncut=7 if self.ts else 6)
-        qelec = (2. * self.spin + 1.) * np.exp(-self.e_elec / (kB * T))
-        self.q = qtrans * qrot * qvib * qelec
+        raise NotImplementedError
 
     def copy(self):
-        return self.__class__(self.outcar, self.T, self.P, self.linear, \
-                self.symm, self.spin)
+        return self.__class__(self.outcar, self.linear, self.symm, self.spin, \
+                self.label, self.eref)
 
 
-class Harmonic(_Thermo):
-    def __init__(self, outcar, T=298.15, ts=False, coord=1, h_scale=1.0, \
-            s_scale=1.0, fixed=False, label=None, eref=None, spin=0., metal=None, \
-            transient=False):
-        super(Harmonic, self).__init__(outcar, T, None, None, None, \
-                spin, ts, h_scale, s_scale, fixed, label, eref, metal, transient)
-        self.gas = False
-        nimag = 1 if ts else 0
-        assert np.all(self.freqs[nimag:] > 0), "Imaginary frequencies found!"
-        self.thermo = HarmonicThermo(
-                self.freqs[nimag:],
-                electronicenergy=self.e_elec,
-                )
+class Gas(_Fluid):
+    def _calc_q(self, T):
+        self._calc_qelec(T)
+        self._calc_qtrans3D(T)
+        self._calc_qrot(T)
+        self._calc_qvib(T, ncut=7 if self.ts else 6)
+        self.qtot = self.qelec * self.qtrans3D * self.qrot * self.qvib
+        self.Etot = self.Eelec + self.Etrans3D + self.Erot + self.Evib
+        self.Htot = self.Etot + _k * T
+        self.Stot = self.Selec + self.Strans3D + self.Srot + self.Svib
+
+
+class Liquid(_Fluid):
+    def _calc_q(self, T):
+        self._calc_qelec(T)
+        self._calc_qvib(T, ncut=7 if self.ts else 6)
+        self.qtot = self.qelec * self.qvib
+        self.Etot = self.Eelec + self.Evib
+        self.Htot = self.Etot + _k * T
+        self.Stot = self.Selec + self.Svib
+
+
+class Adsorbate(_Thermo):
+    def __init__(self, outcar, spin=0., ts=False, coord=1, label=None, \
+            eref=None, metal=None):
+        super(Adsorbate, self).__init__(outcar, False, None, \
+                spin, ts, label, eref, metal)
+        assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
         self.coord = coord
 
-    def _calc_enthalpy(self, T):
-        self.enthalpy = self.thermo.get_internal_energy(T, verbose=False) * self.h_scale
-
-    def _calc_entropy(self, T, P):
-        self.entropy = self.thermo.get_entropy(T, verbose=False) * self.s_scale
+    def get_reference_state(self):
+        return 1.
 
     def _calc_q(self, T):
-        qvib = self.get_qvib(T, ncut=1 if self.ts else 0)
-        qelec = (2. * self.spin + 1.) * np.exp(-self.e_elec / (kB * T))
-        self.q = qvib * qelec
+        self._calc_qvib(T, ncut=1 if self.ts else 0)
+        self._calc_qelec(T)
+        self.qtot = self.qelec * self.qvib
+        self.Etot = self.Eelec + self.Evib
+        self.Htot = self.Etot + _k * T
+        self.Stot = self.Selec + self.Svib
 
     def copy(self):
         return self.__class__(self.outcar, self.T, self.ts)
 
 
 class Shomate(_Thermo):
-    def __init__(self, label, elements, shomatepars, gas, T, coord=1):
-        self.label = label
-        self.elements = elements
-        self.shomatepars = shomatepars
-        self.A = shomatepars[0]
-        self.B = shomatepars[1]
-        self.C = shomatepars[2]
-        self.D = shomatepars[3]
-        self.E = shomatepars[4]
-        self.F = shomatepars[5]
-        self.G = shomatepars[6]
-        self.T = T
-        self.gas = gas
-        self.coord = coord
+    def __init__(self):
+        raise NotImplementedError
 
-    def get_enthalpy(self, T=None):
-        if T is None:
-            T = self.T
-        t = T / 1000
-        H = self.A*t + self.B*t**2/2. + self.C*t**3/3. + self.D*t**4/4. \
-                - self.E/t + self.F
-        H *= kJ / mol
-        return H
-
-    def get_entropy(self, T=None, P=None):
-        if T is None:
-            T = self.T
-        t = T / 1000
-        S = self.A*np.log(t) + self.B*t + self.C*t**2/2. + self.D*t**3/3. \
-                - self.E/(2*t**2) + self.G
-        S *= J / mol
-        return S
-
-    def copy(self):
-        return self.__class__(self.label, self.shomatepars, self.gas, self.T)
-
-    def __repr__(self):
-        return self.label
+#    def __init__(self, label, elements, shomatepars, fluid, T, coord=1):
+#        self.label = label
+#        self.elements = elements
+#        self.shomatepars = shomatepars
+#        self.A = shomatepars[0]
+#        self.B = shomatepars[1]
+#        self.C = shomatepars[2]
+#        self.D = shomatepars[3]
+#        self.E = shomatepars[4]
+#        self.F = shomatepars[5]
+#        self.G = shomatepars[6]
+#        self.T = T
+#        self.fluid = fluid
+#        self.coord = coord
+#
+#    def get_enthalpy(self, T=None):
+#        if T is None:
+#            T = self.T
+#        t = T / 1000
+#        H = self.A*t + self.B*t**2/2. + self.C*t**3/3. + self.D*t**4/4. \
+#                - self.E/t + self.F
+#        H *= kJ / mol
+#        return H
+#
+#    def get_entropy(self, T=None, P=None):
+#        if T is None:
+#            T = self.T
+#        t = T / 1000
+#        S = self.A*np.log(t) + self.B*t + self.C*t**2/2. + self.D*t**3/3. \
+#                - self.E/(2*t**2) + self.G
+#        S *= J / mol
+#        return S
+#
+#    def copy(self):
+#        return self.__class__(self.label, self.shomatepars, self.fluid, self.T)
+#
+#    def __repr__(self):
+#        return self.label
 
 
 class _Reactants(object):
@@ -352,18 +410,27 @@ class _Reactants(object):
 
             else:
                 raise NotImplementedError
+        self.reference_state = 1.
+        for species in self.species:
+            self.reference_state *= species.get_reference_state()
 
-    def get_enthalpy(self, T=None):
+    def get_H(self, T=None):
         H = 0.
         for species in self.species:
-            H += species.get_enthalpy(T)
+            H += species.get_H(T)
         return H
 
-    def get_entropy(self, T=None, P=None):
+    def get_S(self, T=None):
         S = 0.
         for species in self.species:
-            S += species.get_entropy(T, P)
+            S += species.get_S(T)
         return S
+
+    def get_E(self, T=None):
+        E = 0.
+        for species in self.species:
+            E += species.get_E(T)
+        return E
 
     def get_q(self, T=None):
         q = 1.
@@ -371,11 +438,8 @@ class _Reactants(object):
             q *= species.get_q(T)
         return q
 
-    def get_energy(self):
-        E = 0.
-        for species in self.species:
-            E += species.get_energy()
-        return E
+    def get_reference_state(self):
+        return self.reference_state
 
     def copy(self):
         return self.__class__(self.species)
