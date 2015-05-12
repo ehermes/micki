@@ -5,7 +5,7 @@ import numpy as np
 
 from ase.io import read
 
-from ase.units import J, kJ, mol, _hplanck, m, kg, _k, kB, _c
+from ase.units import J, kJ, mol, _hplanck, m, kg, _k, kB, _c, _Nav
 
 from masses import masses
 
@@ -126,7 +126,7 @@ class _Thermo(object):
 
     def _calc_qtrans3D(self, T):
         mtot = sum(self.mass) / kg
-        self.qtrans3D = (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.) / self.rho0
+        self.qtrans3D = 0.001 * (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.) / (_Nav * self.rho0)
         self.Etrans3D = 3. * kB * T / 2. * self.scale['Etrans3D']
         self.Strans3D = kB * (5./2. + np.log(self.qtrans3D)) * self.scale['Strans3D']
 
@@ -148,7 +148,7 @@ class _Thermo(object):
             self.Srot = kB * (3./2. + np.log(self.qrot)) * self.scale['Srot']
 
     def _calc_qvib(self, T, ncut=0):
-        thetavib =100 * _c * _hplanck * self.freqs[ncut:] / _k
+        thetavib = self.freqs[ncut:] / kB
         self.qvib = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
         self.Evib = kB * sum(thetavib * (1./2. + 1./(np.exp(thetavib/T) - 1.))) \
                 * self.scale['Evib']
@@ -259,6 +259,9 @@ class _Thermo(object):
     def __add__(self, other):
         return _Reactants([self, other])
 
+    def __iadd__(self, other):
+        raise NotImplementedError
+
     def __mul__(self, factor):
         assert isinstance(factor, int)
         return _Reactants([self for i in xrange(factor)])
@@ -291,7 +294,7 @@ class Gas(_Fluid):
         self._calc_qvib(T, ncut=7 if self.ts else 6)
         self.qtot = self.qtrans3D * self.qrot * self.qvib
         self.Etot = self.Eelec + self.Etrans3D + self.Erot + self.Evib
-        self.Htot = self.Etot + _k * T
+        self.Htot = self.Etot + kB * T
         self.Stot = self.Selec + self.Strans3D + self.Srot + self.Svib
 
 
@@ -301,7 +304,7 @@ class Liquid(_Fluid):
         self._calc_qvib(T, ncut=7 if self.ts else 6)
         self.qtot = self.qvib
         self.Etot = self.Eelec + self.Evib
-        self.Htot = self.Etot + _k * T
+        self.Htot = self.Etot + kB * T
         self.Stot = self.Selec + self.Svib
 
 
@@ -321,7 +324,7 @@ class Adsorbate(_Thermo):
         self._calc_qelec(T)
         self.qtot = self.qvib
         self.Etot = self.Eelec + self.Evib
-        self.Htot = self.Etot + _k * T
+        self.Htot = self.Etot + kB * T
         self.Stot = self.Selec + self.Svib
 
     def copy(self):
@@ -377,7 +380,7 @@ class _Reactants(object):
     def __init__(self, species):
         self.species = []
         self.elements = {}
-        for other in species:
+        for i, other in enumerate(species):
             if isinstance(other, _Reactants):
                 # If we're adding a _Reactants object to another
                 # _Reactants object, just merge species and elements.
@@ -465,9 +468,10 @@ class _Reactants(object):
             raise NotImplementedError
 
     def __add__(self, other):
-        new = self.copy()
-        new += other
-        return new
+        return _Reactants([self, other])
+#        new = self.copy()
+#        new += other
+#        return new
 
     def __imul__(self, factor):
         raise ValueError, "Reactants can only be multiplied by an integer"

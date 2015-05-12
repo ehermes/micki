@@ -99,20 +99,19 @@ class Reaction(object):
         self.scale_old = self.scale.copy()
 
     def is_update_needed(self, T, N0):
-        needed = True
-        while needed:
-            if self.keq is None:
-                break
-            if T is not None and T != self.T:
-                break
-            if np.any([self.scale[param] != self.scale_old[param] \
-                    for param in self.scale_params]):
-                break
-            needed = False
-        return needed
+        if self.keq is None:
+            return True
+        if T is not None and T != self.T:
+            return True
+        if N0 is not None and N0 != self.N0:
+            return True
+        for param in self.scale_params:
+            if self.scale[param] != self.scale_old[param]:
+                return True
+        return False
 
-    def get_keq(self, T):
-        self.update(T)
+    def get_keq(self, T, N0):
+        self.update(T, N0)
         return self.keq
 
     def get_kfor(self, T, N0):
@@ -146,14 +145,15 @@ class Reaction(object):
                     / self.reactants.get_reference_state()
 
     def _calc_krev(self, T, N0):
-        if self.ts is None:
-            self.krev = _k * T / _hplanck
-            if self.keq > 1:
-                self.krev /= self.keq
-            else:
-                self.krev = self.kfor / self.keq
-        else:
-            self.krev = self.kfor / self.keq
+        self.krev = self.kfor / self.keq
+#        if self.ts is None:
+#            self.krev = _k * T / _hplanck
+#            if self.keq > 1:
+#                self.krev /= self.keq
+#            else:
+#                self.krev = self.kfor / self.keq
+#        else:
+#            self.krev = self.kfor / self.keq
 
     def __repr__(self):
         string = self.reactants.__repr__() + ' <-> '
@@ -284,7 +284,7 @@ class Model(object):
         for species in U0:
             if species not in self.species:
                 raise ValueError, "Unknown species!"
-            if isinstance(species, Adsorbate) and species is not self.vacnacy:
+            if isinstance(species, Adsorbate) and species is not self.vacancy:
                 freesites += U0[species] * species.coord
         assert freesites <= 1., "Too many adsorbates!"
         if self.vacancy not in U0:
@@ -372,7 +372,7 @@ class Model(object):
                     if i < self.nz - 1:
                         f += diff * (self.symbols_dict[(species, i+1)] \
                                 - self.symbols_dict[(species, i)]) / self.dz[i]
-                    if i == 0:
+                    if i == 0 and species not in self.fixed:
                         for j, rate in enumerate(self.rates):
                             if self.is_rate_ads[j]:
                                 f += self.rate_count[j][species] * rate
