@@ -164,7 +164,7 @@ class Reaction(object):
 
 class Model(object):
     def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
-            shape='FLAT', steady_state=None, D=None):
+            shape='FLAT', steady_state=[], fixed=[], D=None):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -177,6 +177,7 @@ class Model(object):
         self.vacancy = vacancy
 
         self.steady_state = steady_state
+        self.fixed = fixed
         self.N0 = N0
         self.T = T
         self.V = V
@@ -245,8 +246,9 @@ class Model(object):
                 if i > 0:
                     self.zi[i] += self.dz[i-1]/2.
 
-    def _rate_calc(self):
+    def _rate_init(self):
         self.rates = []
+        self.rates_exec = []
         self.rate_count = []
         self.is_rate_ads = []
         for reaction in self.reactions:
@@ -266,14 +268,30 @@ class Model(object):
                     elif isinstance(species, Gas):
                         rate_count[species] *= self.nsites / self.V
             self.rates.append(rate_for - rate_rev)
+            self.rates_exec.append(sym.lambdify(self.symbols, rate_for - rate_rev))
             self.rate_count.append(rate_count)
             self.is_rate_ads.append(reaction.adsorption)
 
+    def rate_calc(self, U):
+        r = np.zeros_like(self.rates_exec, dtype=float)
+        for i in xrange(len(self.reactions)):
+            r[i] = self.rates_exec[i](*U)
+        return r
+
     def set_initial_conditions(self, U0):
         self.U0 = []
+        freesites = 0
         for species in U0:
             if species not in self.species:
                 raise ValueError, "Unknown species!"
+            if isinstance(species, Adsorbate) and species is not self.vacnacy:
+                freesites += U0[species] * species.coord
+        assert freesites <= 1., "Too many adsorbates!"
+        if self.vacancy not in U0:
+            U0[self.vacancy] = 1. - freesites
+        else:
+            assert abs(U0[self.vacancy] - freesites) < 1e-6, \
+                    "Vacancy concentration not consistent!"
         for species in self.species:
             if species in U0:
                 U0i = U0[species]
@@ -286,13 +304,13 @@ class Model(object):
                 self.U0.append(U0i)
         self._initialize()
 
-    def f(self, x, t):
+    def f(self, x, t=None):
         y = np.zeros_like(self.f_exec, dtype=float)
         for i in xrange(len(self.symbols)):
             y[i] = self.f_exec[i](*x)
         return y
 
-    def jac(self, x, t):
+    def jac(self, x, t=None):
         y = np.zeros_like(self.jac_exec, dtype=float)
         for i in xrange(len(self.symbols)):
             for j in xrange(len(self.symbols)):
@@ -339,7 +357,7 @@ class Model(object):
             self.dz = list(self.dz)
             self.dz.append(2 * self.zi[-1] - self.dz[-2])
             self.dz = np.array(self.dz)
-        self._rate_calc()
+        self._rate_init()
         self.f_sym = []
         self.f_exec = []
         for species in self.species:
@@ -348,7 +366,7 @@ class Model(object):
                     f = 0
                     diff = self.D[species] / self.zi[i]
                     if i > 0:
-                        if not (i == self.nz - 1 and species not in self.steady_state):
+                        if not (i == self.nz - 1 and species not in self.fixed):
                             f += diff * (self.symbols_dict[(species, i-1)] \
                                     - self.symbols_dict[(species, i)]) / self.dz[i-1]
                     if i < self.nz - 1:
@@ -364,8 +382,9 @@ class Model(object):
                     continue
             elif isinstance(species, Gas):
                 f = 0
-                for j, rate in enumerate(self.rates):
-                    f += self.rate_count[j][species] * rate
+                if species not in self.fixed:
+                    for j, rate in enumerate(self.rates):
+                        f += self.rate_count[j][species] * rate
             elif species is not self.vacancy:
                 f = 0
                 for i, rate in enumerate(self.rates):
@@ -391,17 +410,31 @@ class Model(object):
 
     def _results(self):
         self.U = []
+        self.dU = []
+        self.r = []
         for i, t in enumerate(self.t):
+            dU1 = self.f(self.U1[i], t)
             Ui = {}
+            dUi = {}
             j = 0
             for species in self.species:
                 if isinstance(species, Liquid):
                     for k in xrange(self.nz):
                         Ui[(species, k)] = self.U1[i][j]
+                        dUi[(species, k)] = dU1[j]
                         j += 1
                     Ui[species] = self.U1[i][j-1]
+                    dUi[species] = dU1[j-1]
                 else:
                     Ui[species] = self.U1[i][j]
+                    dUi[species] = dU1[j]
                     j += 1
             self.U.append(Ui)
-        return self.U, self.t
+            self.dU.append(dUi)
+
+            r = self.rate_calc(self.U1[i])
+            ri = {}
+            for j, reaction in enumerate(self.reactions):
+                ri[reaction] = r[j]
+            self.r.append(ri)
+        return self.U, self.dU, self.r

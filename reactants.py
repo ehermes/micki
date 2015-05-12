@@ -29,7 +29,7 @@ class _Thermo(object):
         self.ts = ts
         self.label = label
         self.qtot = None
-        self.qelec = None
+#        self.qelec = None
         self.qtrans2D = None
         self.qtrans3D = None
         self.qrot = None
@@ -156,7 +156,7 @@ class _Thermo(object):
                 - np.log(1. - np.exp(-thetavib/T))) * self.scale['Svib']
 
     def _calc_qelec(self, T):
-        self.qelec = 2. * self.spin + 1. * np.exp(-self.potential_energy / (_k * T))
+#        self.qelec = (2. * self.spin + 1.) * np.exp(-self.potential_energy / (_k * T))
         self.Eelec = self.potential_energy * self.scale['Eelec']
         self.Selec = kB * np.log(2. * self.spin + 1.) * self.scale['Selec']
 
@@ -289,7 +289,7 @@ class Gas(_Fluid):
         self._calc_qtrans3D(T)
         self._calc_qrot(T)
         self._calc_qvib(T, ncut=7 if self.ts else 6)
-        self.qtot = self.qelec * self.qtrans3D * self.qrot * self.qvib
+        self.qtot = self.qtrans3D * self.qrot * self.qvib
         self.Etot = self.Eelec + self.Etrans3D + self.Erot + self.Evib
         self.Htot = self.Etot + _k * T
         self.Stot = self.Selec + self.Strans3D + self.Srot + self.Svib
@@ -299,7 +299,7 @@ class Liquid(_Fluid):
     def _calc_q(self, T):
         self._calc_qelec(T)
         self._calc_qvib(T, ncut=7 if self.ts else 6)
-        self.qtot = self.qelec * self.qvib
+        self.qtot = self.qvib
         self.Etot = self.Eelec + self.Evib
         self.Htot = self.Etot + _k * T
         self.Stot = self.Selec + self.Svib
@@ -319,7 +319,7 @@ class Adsorbate(_Thermo):
     def _calc_q(self, T):
         self._calc_qvib(T, ncut=1 if self.ts else 0)
         self._calc_qelec(T)
-        self.qtot = self.qelec * self.qvib
+        self.qtot = self.qvib
         self.Etot = self.Eelec + self.Evib
         self.Htot = self.Etot + _k * T
         self.Stot = self.Selec + self.Svib
