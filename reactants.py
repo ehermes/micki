@@ -5,7 +5,7 @@ import numpy as np
 
 from ase.io import read
 
-from ase.units import J, kJ, mol, _hplanck, m, kg, _k, kB, _c, _Nav
+from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal
 
 from masses import masses
 
@@ -29,28 +29,27 @@ class _Thermo(object):
         self.ts = ts
         self.label = label
         self.qtot = None
-#        self.qelec = None
         self.qtrans2D = None
-        self.qtrans3D = None
+        self.qtrans = None
         self.qrot = None
         self.qvib = None
         self.Stot = None
         self.Selec = None
         self.Strans2D = None
-        self.Strans3D = None
+        self.Strans = None
         self.Srot = None
         self.Svib = None
         self.Etot = None
         self.Eelec = None
         self.Etrans2D = None
-        self.Etrans3D = None
+        self.Etrans = None
         self.Erot = None
         self.Evib = None
         self.Htot = None
 
         self.scale = {}
-        self.scale_params = ['Stot', 'Selec', 'Strans2D', 'Strans3D', 'Srot', 'Svib', \
-                'Etot', 'Eelec', 'Etrans2D', 'Etrans3D', 'Erot', 'Evib', 'Htot']
+        self.scale_params = ['Stot', 'Selec', 'Strans2D', 'Strans', 'Srot', 'Svib', \
+                'Etot', 'Eelec', 'Etrans2D', 'Etrans', 'Erot', 'Evib', 'Htot']
         for param in self.scale_params:
             self.scale[param] = 1.0
         self.scale_old = self.scale.copy()
@@ -124,11 +123,12 @@ class _Thermo(object):
         self.Etrans2D = kB * T * self.scale['Etrans2D']
         self.Strans2D = kB * (2 + np.log(self.qtrans2D)) * self.scale['Strans2D']
 
-    def _calc_qtrans3D(self, T):
+    def _calc_qtrans(self, T):
         mtot = sum(self.mass) / kg
-        self.qtrans3D = 0.001 * (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.) / (_Nav * self.rho0)
-        self.Etrans3D = 3. * kB * T / 2. * self.scale['Etrans3D']
-        self.Strans3D = kB * (5./2. + np.log(self.qtrans3D)) * self.scale['Strans3D']
+        self.qtrans = 0.001 * (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.) \
+                / (mol * self.rho0)
+        self.Etrans = 3. * kB * T / 2. * self.scale['Etrans']
+        self.Strans = kB * (5./2. + np.log(self.qtrans)) * self.scale['Strans']
 
     def _calc_qrot(self, T):
         com = self.atoms.get_center_of_mass()
@@ -156,7 +156,6 @@ class _Thermo(object):
                 - np.log(1. - np.exp(-thetavib/T))) * self.scale['Svib']
 
     def _calc_qelec(self, T):
-#        self.qelec = (2. * self.spin + 1.) * np.exp(-self.potential_energy / (_k * T))
         self.Eelec = self.potential_energy * self.scale['Eelec']
         self.Selec = kB * np.log(2. * self.spin + 1.) * self.scale['Selec']
 
@@ -271,6 +270,7 @@ class _Thermo(object):
 
 
 class _Fluid(_Thermo):
+    """Master object for both liquids and gasses"""
     def __init__(self, outcar, linear=False, symm=1, spin=0., \
             label=None, eref=None, rhoref=1.):
         super(_Fluid, self).__init__(outcar, linear, symm, \
@@ -284,28 +284,25 @@ class _Fluid(_Thermo):
     def copy(self):
         return self.__class__(self.outcar, self.linear, self.symm, self.spin, \
                 self.label, self.eref)
+    def _calc_q(self, T):
+        self._calc_qelec(T)
+        self._calc_qtrans(T)
+        self._calc_qrot(T)
+        self._calc_qvib(T, ncut=7 if self.ts else 6)
+        self.qtot = self.qtrans * self.qrot * self.qvib
+        self.Etot = self.Eelec + self.Etrans + self.Erot + self.Evib
+        self.Htot = self.Etot + kB * T
+        self.Stot = self.Selec + self.Strans + self.Srot + self.Svib
 
 
 class Gas(_Fluid):
-    def _calc_q(self, T):
-        self._calc_qelec(T)
-        self._calc_qtrans3D(T)
-        self._calc_qrot(T)
-        self._calc_qvib(T, ncut=7 if self.ts else 6)
-        self.qtot = self.qtrans3D * self.qrot * self.qvib
-        self.Etot = self.Eelec + self.Etrans3D + self.Erot + self.Evib
-        self.Htot = self.Etot + kB * T
-        self.Stot = self.Selec + self.Strans3D + self.Srot + self.Svib
+    pass
 
 
 class Liquid(_Fluid):
     def _calc_q(self, T):
-        self._calc_qelec(T)
-        self._calc_qvib(T, ncut=7 if self.ts else 6)
-        self.qtot = self.qvib
-        self.Etot = self.Eelec + self.Evib
-        self.Htot = self.Etot + kB * T
-        self.Stot = self.Selec + self.Svib
+        super(Liquid, self)._calc_q(T)
+        self.Stot += kB * np.log(kB * T * mol / (100 * Pascal * m**3)) - 8.7291e-4
 
 
 class Adsorbate(_Thermo):
