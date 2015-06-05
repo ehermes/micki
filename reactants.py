@@ -328,6 +328,82 @@ class Adsorbate(_Thermo):
         return self.__class__(self.outcar, self.spin, self.ts, self.coord, \
                 self.label, self.eref, self.metal)
 
+class _DummyThermo(_Thermo):
+    def __init__(self, linear, symm, spin, ts, freqs, label, E, rhoref):
+        self.T = None
+        self.potential_energy = E
+        self.linear = linear
+        self.symm = symm
+        self.spin = spin
+        self.ts = ts
+        self.label = label
+        self.freqs = freqs
+        self.rho0 = rhoref
+        self.qtot = None
+        self.qtrans = None
+        self.qrot = None
+        self.qvib = None
+        self.Stot = None
+        self.Selec = None
+        self.Strans = None
+        self.Srot = None
+        self.Svib = None
+        self.Eelec = self.potential_energy
+        self.Etrans = None
+        self.Erot = None
+        self.Evib = None
+        self.Htot = None
+        self.scale = {}
+        self.scale_params = ['Stot', 'Selec', 'Strans', 'Srot', 'Svib', \
+                'Etot', 'Eelec', 'Etrans', 'Erot', 'Evib', 'Htot']
+        for param in self.scale_params:
+            self.scale[param] = 1.0
+        self.scale_old = self.scale.copy()
+
+    def get_reference_state(self):
+        return self.rho0
+
+class DummyFluid(_DummyThermo):
+    def __init__(self, geometry, linear=False, symm=1, spin=0., ts=False, \
+            freqs=[], label=None, E=0., rhoref=1.):
+        self.geometry = geometry
+        self.atoms = read(geometry)
+        self.mass = [masses[atom.symbol] for atom in self.atoms]
+        self.atoms.set_masses(self.mass)
+        super(DummyFluid, self).__init__(linear, symm, spin, ts, freqs, label, E, rhoref)
+
+    def copy(self):
+        return self.__class__(self.geometry, self.linear, self.symm, self.spin, \
+                self.ts, self.freqs, self.label, self.potential_energy, self.rho0)
+
+    def _calc_q(self, T):
+        self._calc_qelec(T)
+        self._calc_qtrans(T)
+        self._calc_qrot(T)
+        self._calc_qvib(T)
+        self.qtot = self.qtrans * self.qrot * self.qvib
+        self.Etot = self.Eelec + self.Etrans + self.Erot + self.Evib
+        self.Htot = self.Etot + kB * T
+        self.Stot = self.Selec + self.Strans + self.Srot + self.Svib
+
+
+class DummyAdsorbate(_DummyThermo):
+    def __init__(self, label, spin=0., ts=False, coord=1, freqs=[], E=0):
+        self.coord = coord
+        super(DummyAdsorbate, self).__init__(False, 1, spin, ts, freqs, label, E, 1.)
+
+    def _calc_q(self, T):
+        self._calc_qvib(T)
+        self._calc_qelec(T)
+        self.qtot = self.qvib
+        self.Etot = self.Eelec + self.Evib
+        self.Htot = self.Etot + kB * T
+        self.Stot = self.Selec + self.Svib
+
+    def copy(self):
+        return self.__class__(self.label, self.spin, self.ts, self.coord, \
+                self.freqs, self.potential_energy)
+
 
 class Shomate(_Thermo):
     def __init__(self):

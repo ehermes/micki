@@ -6,11 +6,15 @@ from scipy.integrate import odeint
 
 from ase.units import kB, _hplanck, kg, _k, _Nav, mol
 
-from odespy import Radau5Implicit
-
 import sympy as sym
 
 from mkm.reactants import _Thermo, _Fluid, _Reactants, Gas, Liquid, Adsorbate
+
+from assimulo.problem import Implicit_Problem
+
+from assimulo.solvers import IDA
+
+from copy import copy
 
 
 class Reaction(object):
@@ -59,7 +63,7 @@ class Reaction(object):
         self.krev = None
         self.T = None
         self.N0 = None
-        self.scale_params=['dH', 'dS', 'dH_act', 'dS_act']
+        self.scale_params=['dH', 'dS', 'dH_act', 'dS_act', 'kfor', 'krev']
         self.scale = {}
         for param in self.scale_params:
             self.scale[param] = 1.0
@@ -125,14 +129,15 @@ class Reaction(object):
     def _calc_keq(self, T):
         self.keq = np.exp(-self.dH / (kB * T) + self.dS / kB) \
                 * self.products.get_reference_state() \
-                / self.reactants.get_reference_state()
+                / self.reactants.get_reference_state() \
+                * self.scale['kfor'] / self.scale['krev']
 
     def _calc_kfor(self, T, N0):
         if self.ts is None:
             if self.method == 'EQUIL':
                 self.kfor = _k * T / _hplanck
                 if self.keq < 1:
-                    self.kfor *= self.keq
+                    self.kfor *= self.keq * self.scale['krev'] / self.scale['kfor']
             elif self.method == 'CT':
                 # Collision Theory
                 # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
@@ -143,17 +148,10 @@ class Reaction(object):
             self.kfor = (_k * T / _hplanck) * np.exp(-self.dH_act / (kB * T) \
                     + self.dS_act / kB) * self.ts.get_reference_state() \
                     / self.reactants.get_reference_state()
+        self.kfor *= self.scale['kfor']
 
     def _calc_krev(self, T, N0):
         self.krev = self.kfor / self.keq
-#        if self.ts is None:
-#            self.krev = _k * T / _hplanck
-#            if self.keq > 1:
-#                self.krev /= self.keq
-#            else:
-#                self.krev = self.kfor / self.keq
-#        else:
-#            self.krev = self.kfor / self.keq
 
     def __repr__(self):
         string = self.reactants.__repr__() + ' <-> '
@@ -164,7 +162,7 @@ class Reaction(object):
 
 class Model(object):
     def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
-            shape='FLAT', steady_state=[], fixed=[], D=None):
+            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -177,7 +175,12 @@ class Model(object):
         self.vacancy = vacancy
 
         self.steady_state = steady_state
+        self.solvent = solvent
         self.fixed = fixed
+        if self.solvent not in self.fixed:
+            self.fixed.append(self.solvent)
+        for species in self.fixed:
+            assert species in self.species, "Unknown fixed species {}".format(species)
         self.N0 = N0
         self.T = T
         self.V = V
@@ -206,6 +209,7 @@ class Model(object):
                         "Specify diffusion constant for {}!".format(species)
                 newspecies.append(species)
                 self.nliquid += 1
+                assert self.solvent is not None, "Must specify solvent!"
         for species in self.species:
             if isinstance(species, Gas):
                 newspecies.append(species)
@@ -248,7 +252,6 @@ class Model(object):
 
     def _rate_init(self):
         self.rates = []
-        self.rates_exec = []
         self.rate_count = []
         self.is_rate_ads = []
         for reaction in self.reactions:
@@ -268,7 +271,7 @@ class Model(object):
                     elif isinstance(species, Gas):
                         rate_count[species] *= self.nsites / self.V
             self.rates.append(rate_for - rate_rev)
-            self.rates_exec.append(sym.lambdify(self.symbols, rate_for - rate_rev))
+#            self.rates_exec.append(sym.lambdify(self.symbols, rate_for - rate_rev))
             self.rate_count.append(rate_count)
             self.is_rate_ads.append(reaction.adsorption)
 
@@ -279,29 +282,36 @@ class Model(object):
         return r
 
     def set_initial_conditions(self, U0):
-        self.U0 = []
-        freesites = 0
-        for species in U0:
+        self.U0 = U0
+        occsites = 0
+        for species in self.U0:
+            if type(species) is tuple:
+                species = species[0]
             if species not in self.species:
                 raise ValueError, "Unknown species!"
             if isinstance(species, Adsorbate) and species is not self.vacancy:
-                freesites += U0[species] * species.coord
-        assert freesites <= 1., "Too many adsorbates!"
+                occsites += self.U0[species] * species.coord
+            elif isinstance(species, Liquid):
+                if (species, self.nz - 1) in self.U0:
+                    assert abs(self.U0[species] - self.U0[(species, self.nz - 1)]) < 1e-6, \
+                            "Liquid concentrations not consistent!"
+        assert occsites <= 1., "Too many adsorbates!"
         if self.vacancy not in U0:
-            U0[self.vacancy] = 1. - freesites
+            U0[self.vacancy] = 1. - occsites
         else:
-            assert abs(U0[self.vacancy] - freesites) < 1e-6, \
+            assert abs(1. - U0[self.vacancy] - occsites) < 1e-6, \
                     "Vacancy concentration not consistent!"
         for species in self.species:
-            if species in U0:
-                U0i = U0[species]
-            else:
-                U0i = 0.
+            if species not in self.U0:
+                self.U0[species] = 0.
             if isinstance(species, Liquid):
-                for i in xrange(self.nz):
-                    self.U0.append(U0i)
-            else:
-                self.U0.append(U0i)
+                U0i = self.U0[species]
+                if species is not self.solvent:
+                    for i in xrange(self.nz):
+                        if (species, i) not in self.U0:
+                            self.U0[(species, i)] = U0i
+                        else:
+                            U0i = self.U0[(species, i)]
         self._initialize()
 
     def f(self, x, t=None):
@@ -310,43 +320,70 @@ class Model(object):
             y[i] = self.f_exec[i](*x)
         return y
 
-    def jac(self, x, t=None):
-        y = np.zeros_like(self.jac_exec, dtype=float)
+    def jac(self, c, t, y, yd):
+        jac = np.zeros_like(self.jac_exec, dtype=float)
         for i in xrange(len(self.symbols)):
             for j in xrange(len(self.symbols)):
-                y[i, j] = self.jac_exec[i][j](*x)
-        return y
+                jac[i, j] = self.jac_exec[i][j](*y)
+        jac -= c * self.M
+        return jac
 
     def mas(self):
         return self.M
 
-    def solve(self, t):
-        self.U1, self.t = self.model.solve(t)
+    def res(self, t, x, s):
+        return self.f(x, t) - np.dot(self.M, s)
+
+    def adda(self, x, t, p):
+        return p + self.M
+
+    def solve(self, t, ncp):
+        self.sim = IDA(self.model)
+        self.sim.verbosity = 50
+        self.t, self.U1, self.dU1 = self.sim.simulate(t, ncp)
         return self._results()
 
     def _initialize(self):
-        size = (self.nz - 1) * self.nliquid + len(self.species)
-        self.M = np.identity(size, dtype=int)
+        size = (self.nz - 1) * (self.nliquid - 1) + len(self.species)
+        M = np.ones(size, dtype=int)
+#        self.M = np.identity(size, dtype=int)
         i = 0
         for species in self.species:
-            if isinstance(species, Liquid):
+            if isinstance(species, Liquid) and species is not self.solvent:
                 i += self.nz
             else:
                 if species in self.steady_state or species is self.vacancy:
-                    self.M[i, i] = 0
+                    M[i] = 0
+#                    self.M[i, i] = 0
                 i += 1
-        self.symbols = sym.symbols('x0:{}'.format(size))
+        self.symbols_all = sym.symbols('x0:{}'.format(size))
         self.symbols_dict = {}
-        j = 0
+        self.symbols = []
+        i = 0
         for species in self.species:
             if isinstance(species, Liquid):
-                self.symbols_dict[species] = self.symbols[j]
-                for i in xrange(self.nz):
-                    self.symbols_dict[(species, i)] = self.symbols[j]
-                    j += 1
+                self.symbols_dict[species] = self.symbols_all[i]
+                if species is not self.solvent:
+                    for j in xrange(self.nz):
+                        self.symbols_dict[(species, j)] = self.symbols_all[i]
+                        if not (j == self.nz - 1 and species in self.fixed):
+                            self.symbols.append(self.symbols_all[i])
+                        i += 1
+                else:
+                    self.symbols_dict[(species, 0)] = self.symbols_all[i]
+                    self.symbols_dict[(species, 9)] = self.symbols_all[i]
+                    i += 1
+#                self.symbols_dict[species] = self.symbols_all[i - 1]
             else:
-                self.symbols_dict[species] = self.symbols[j]
-                j += 1
+                self.symbols_dict[species] = self.symbols_all[i]
+                if species not in self.fixed:
+                    self.symbols.append(self.symbols_all[i])
+                i += 1
+        self.M = np.zeros((len(self.symbols), len(self.symbols)), dtype=int)
+        for i, symboli in enumerate(self.symbols_all):
+            for j, symbolj in enumerate(self.symbols):
+                if symboli == symbolj:
+                    self.M[j, j] = M[i]
 
         # Volume of grid thickness per ads. site
         if self.diffusion:
@@ -359,44 +396,57 @@ class Model(object):
             self.dz = np.array(self.dz)
         self._rate_init()
         self.f_sym = []
-        self.f_exec = []
         for species in self.species:
-            if isinstance(species, Liquid):
+            f = 0
+            if isinstance(species, Liquid) and species is not self.solvent:
                 for i in xrange(self.nz):
                     f = 0
                     diff = self.D[species] / self.zi[i]
                     if i > 0:
-                        if not (i == self.nz - 1 and species not in self.fixed):
-                            f += diff * (self.symbols_dict[(species, i-1)] \
-                                    - self.symbols_dict[(species, i)]) / self.dz[i-1]
+#                        if not (i == self.nz - 1 and species in self.fixed):
+                        f += diff * (self.symbols_dict[(species, i-1)] \
+                                - self.symbols_dict[(species, i)]) / self.dz[i-1]
                     if i < self.nz - 1:
                         f += diff * (self.symbols_dict[(species, i+1)] \
                                 - self.symbols_dict[(species, i)]) / self.dz[i]
-                    if i == 0 and species not in self.fixed:
+                    if i == 0:
                         for j, rate in enumerate(self.rates):
                             if self.is_rate_ads[j]:
                                 f += self.rate_count[j][species] * rate
-                    self.f_sym.append(f)
-                    self.f_exec.append(sym.lambdify(self.symbols, f))
+                    if not (i == self.nz - 1 and species in self.fixed):
+                        self.f_sym.append(f)
+#                    self.f_exec.append(sym.lambdify(self.symbols, f))
                 else:
                     continue
             elif isinstance(species, Gas):
-                f = 0
                 if species not in self.fixed:
                     for j, rate in enumerate(self.rates):
                         f += self.rate_count[j][species] * rate
-            elif species is not self.vacancy:
-                f = 0
+            elif isinstance(species, Adsorbate) and species is not self.vacancy:
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
-            else:
+            elif species is self.vacancy:
                 f = 1
                 for a in self.species:
                     if not isinstance(a, _Fluid):
                         f -= self.symbols_dict[a] * a.coord
-            self.f_sym.append(f)
-            self.f_exec.append(sym.lambdify(self.symbols, f))
+            if species not in self.fixed:
+                self.f_sym.append(f)
+            else:
+                assert f == 0, "Fixed species rate of change not zero!"
+#            self.f_exec.append(sym.lambdify(self.symbols, f))
 
+        subs = {}
+        for species in self.species:
+            if species in self.fixed:
+                if isinstance(species, Liquid) and species is not self.solvent:
+                    species = (species, self.nz - 1)
+                subs[self.symbols_dict[species]] = self.U0[species]
+
+        self.f_exec = []
+        for i, f in enumerate(self.f_sym):
+            self.f_sym[i] = f.subs(subs)
+            self.f_exec.append(sym.lambdify(self.symbols, self.f_sym[i]))
         self.jac_exec = []
         for f in self.f_sym:
             jac_exec = []
@@ -404,9 +454,20 @@ class Model(object):
                 jac_exec.append(sym.lambdify(self.symbols, sym.diff(f, \
                         symbol)))
             self.jac_exec.append(jac_exec)
-        self.model = Radau5Implicit(f=self.f, jac=self.jac, mas=self.mas, \
-                rtol=1e-8)
-        self.model.set_initial_condition(self.U0)
+        self.rates_exec = []
+        for i, r in enumerate(self.rates):
+            self.rates[i] = r.subs(subs)
+            self.rates_exec.append(sym.lambdify(self.symbols, self.rates[i]))
+        U0 = []
+        for symbol in self.symbols:
+            for species, isymbol in self.symbols_dict.iteritems():
+                if symbol == isymbol:
+                    U0.append(self.U0[species])
+                    break
+#        for species in self.species:
+#            U0.append(self.U0[species])
+        self.model = Implicit_Problem(self.res, U0, self.f(U0), 0.)
+        self.model.jac = self.jac
 
     def _results(self):
         self.U = []
@@ -414,21 +475,31 @@ class Model(object):
         self.r = []
         for i, t in enumerate(self.t):
             dU1 = self.f(self.U1[i], t)
-            Ui = {}
+            Ui = copy(self.U0)
             dUi = {}
-            j = 0
             for species in self.species:
-                if isinstance(species, Liquid):
-                    for k in xrange(self.nz):
-                        Ui[(species, k)] = self.U1[i][j]
-                        dUi[(species, k)] = dU1[j]
-                        j += 1
-                    Ui[species] = self.U1[i][j-1]
-                    dUi[species] = dU1[j-1]
-                else:
-                    Ui[species] = self.U1[i][j]
-                    dUi[species] = dU1[j]
-                    j += 1
+                if species in self.fixed:
+                    if isinstance(species, Liquid):
+                        species = (species, self.nz - 1)
+                    dUi[species] = 0.
+            j = 0
+            for j, symbol in enumerate(self.symbols):
+                for species, isymbol in self.symbols_dict.iteritems():
+                    if symbol == isymbol:
+                        Ui[species] = self.U1[i][j]
+                        dUi[species] = dU1[j]
+#            for species in self.species:
+#                if isinstance(species, Liquid):
+#                    for k in xrange(self.nz):
+#                        Ui[(species, k)] = self.U1[i][j]
+#                        dUi[(species, k)] = dU1[j]
+#                        j += 1
+#                    Ui[species] = self.U1[i][j-1]
+#                    dUi[species] = dU1[j-1]
+#                else:
+#                    Ui[species] = self.U1[i][j]
+#                    dUi[species] = dU1[j]
+#                    j += 1
             self.U.append(Ui)
             self.dU.append(dUi)
 
