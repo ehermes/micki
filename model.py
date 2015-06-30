@@ -177,7 +177,7 @@ class Model(object):
         self.steady_state = steady_state
         self.solvent = solvent
         self.fixed = fixed
-        if self.solvent not in self.fixed:
+        if self.solvent is not None and self.solvent not in self.fixed:
             self.fixed.append(self.solvent)
         for species in self.fixed:
             assert species in self.species, "Unknown fixed species {}".format(species)
