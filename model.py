@@ -162,7 +162,7 @@ class Reaction(object):
 
 class Model(object):
     def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
-            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None):
+            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -225,6 +225,9 @@ class Model(object):
         # Set up diffusion grid, if necessary
         if self.diffusion:
             self.set_up_grid()
+
+        if U0 is not None:
+            self.set_initial_conditions(U0)
 
     def add_species(self, species):
         assert isinstance(species, _Thermo)
