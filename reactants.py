@@ -15,12 +15,15 @@ class _Thermo(object):
     def __init__(self, outcar, linear=False, symm=1, spin=0., ts=False, \
             label=None, eref=None, metal=None):
         self.outcar = outcar
+        self.metal = metal
         self.atoms = read(self.outcar, index=0)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
         self.atoms.set_masses(self.mass)
         self.eref = eref
-        self.metal = metal
-        self._read_hess()
+        if 'OUTCAR' in self.outcar:
+            self._read_hess_outcar()
+        elif self.outcar.endswith('.xml'):
+            self._read_hess_xml()
         self.T = None
         self.potential_energy = self.atoms.get_potential_energy()
         self.linear = linear
@@ -159,7 +162,7 @@ class _Thermo(object):
         self.Eelec = self.potential_energy * self.scale['Eelec']
         self.Selec = kB * np.log(2. * self.spin + 1.) * self.scale['Selec']
 
-    def _read_hess(self):
+    def _read_hess_outcar(self):
         # This reads the hessian from the OUTCAR and diagonalizes it
         # to find the frequencies, rather than reading the frequencies
         # directly from the OUTCAR. This is to ensure we use the same
@@ -178,7 +181,7 @@ class _Thermo(object):
                     elif hessblock == 2:
                         line = line.split()
                         dof = len(line)
-                        self.hess = np.zeros((dof, dof), dtype=float)
+                        hess = np.zeros((dof, dof), dtype=float)
                         index = np.zeros(dof, dtype=int)
                         cart = np.zeros(dof, dtype=int)
                         for i, direction in enumerate(line):
@@ -196,7 +199,7 @@ class _Thermo(object):
 
                     elif hessblock == 3:
                         line = line.split()
-                        self.hess[j] = np.array([float(val) for val in line[1:]], \
+                        hess[j] = np.array([float(val) for val in line[1:]], \
                                 dtype=float)
                         j += 1
 
@@ -206,6 +209,36 @@ class _Thermo(object):
                 elif hessblock == 3:
                     break
 
+        hess = -(hess + hess.T) / 2.
+        mass = np.array([self.atoms[i].mass for i in index], dtype=float)
+        hess /= np.sqrt(np.outer(mass, mass))
+        self._diagonalize(index, hess)
+
+    def _read_hess_xml(self):
+        import xml.etree.ElementTree as ET
+
+        tree = ET.parse(self.outcar)
+        root = tree.getroot()
+
+        selective = np.ones((len(self.atoms), 3), dtype=bool)
+        constblock = root.find('structure[@name="initialpos"]/varray[@name="selective"]')
+        if constblock is not None:
+            for i, v in enumerate(constblock):
+                selective[i] = np.array(v.text.split() == np.array(['T', 'T', 'T']))
+        index = []
+        for i, atom in enumerate(self.atoms):
+            for direction in selective[i]:
+                if direction:
+                    index.append(i)
+        
+        hess = np.zeros((len(index), len(index)), dtype=float)
+
+        for i, v in enumerate(root.find('calculation/dynmat/varray[@name="hessian"]')):
+            hess[i] = -np.array([float(val) for val in v.text.split()])
+
+        self._diagonalize(index, hess)
+
+    def _diagonalize(self, index, hess):
         # Temporary work around: My test system OUTCARs include some
         # metal atoms in the hessian, this seems to cause some problems
         # with the MKM. So, here I'm taking only the non-metal part
@@ -217,18 +250,15 @@ class _Thermo(object):
         if not nonmetal:
             self.freqs = np.array([])
             return
-        newhess = np.zeros((len(nonmetal), len(nonmetal)))
-        newindex = np.zeros(len(nonmetal), dtype=int)
+        self.hess = np.zeros((len(nonmetal), len(nonmetal)))
+        self.index = np.zeros(len(nonmetal), dtype=int)
         for i, a in enumerate(nonmetal):
-            newindex[i] = index[a]
+            self.index[i] = index[a]
             for j, b in enumerate(nonmetal):
-                newhess[i, j] = self.hess[a, b]
-        self.hess = newhess
-        index = newindex
+                self.hess[i, j] = hess[a, b]
 
-        self.hess = -(self.hess + self.hess.T) / 2.
-        mass = np.array([self.atoms[i].mass for i in index], dtype=float)
-        self.hess /= np.sqrt(np.outer(mass, mass))
+#        mass = np.array([self.atoms[i].mass for i in self.index], dtype=float)
+#        self.hess /= np.sqrt(np.outer(mass, mass))
         self.hess *= _hplanck**2 * J * m**2 * kg / (4 * np.pi**2)
         v, w = np.linalg.eig(self.hess)
 

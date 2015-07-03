@@ -315,38 +315,6 @@ class Model(object):
                             self.U0[(species, i)] = U0i
                         else:
                             U0i = self.U0[(species, i)]
-        self._initialize()
-
-    def f(self, x, t=None):
-        y = np.zeros_like(self.f_exec, dtype=float)
-        for i in xrange(len(self.symbols)):
-            y[i] = self.f_exec[i](*x)
-        return y
-
-    def jac(self, c, t, y, yd):
-        jac = np.zeros_like(self.jac_exec, dtype=float)
-        for i in xrange(len(self.symbols)):
-            for j in xrange(len(self.symbols)):
-                jac[i, j] = self.jac_exec[i][j](*y)
-        jac -= c * self.M
-        return jac
-
-    def mas(self):
-        return self.M
-
-    def res(self, t, x, s):
-        return self.f(x, t) - np.dot(self.M, s)
-
-    def adda(self, x, t, p):
-        return p + self.M
-
-    def solve(self, t, ncp):
-        self.sim = IDA(self.model)
-        self.sim.verbosity = 50
-        self.t, self.U1, self.dU1 = self.sim.simulate(t, ncp)
-        return self._results()
-
-    def _initialize(self):
         size = (self.nz - 1) * (self.nliquid - 1) + len(self.species)
         M = np.ones(size, dtype=int)
 #        self.M = np.identity(size, dtype=int)
@@ -471,6 +439,36 @@ class Model(object):
 #            U0.append(self.U0[species])
         self.model = Implicit_Problem(self.res, U0, self.f(U0), 0.)
         self.model.jac = self.jac
+
+
+    def f(self, x, t=None):
+        y = np.zeros_like(self.f_exec, dtype=float)
+        for i in xrange(len(self.symbols)):
+            y[i] = self.f_exec[i](*x)
+        return y
+
+    def jac(self, c, t, y, yd):
+        jac = np.zeros_like(self.jac_exec, dtype=float)
+        for i in xrange(len(self.symbols)):
+            for j in xrange(len(self.symbols)):
+                jac[i, j] = self.jac_exec[i][j](*y)
+        jac -= c * self.M
+        return jac
+
+    def mas(self):
+        return self.M
+
+    def res(self, t, x, s):
+        return self.f(x, t) - np.dot(self.M, s)
+
+    def adda(self, x, t, p):
+        return p + self.M
+
+    def solve(self, t, ncp):
+        self.sim = IDA(self.model)
+        self.sim.verbosity = 50
+        self.t, self.U1, self.dU1 = self.sim.simulate(t, ncp)
+        return self._results()
 
     def _results(self):
         self.U = []
