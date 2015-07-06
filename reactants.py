@@ -210,8 +210,6 @@ class _Thermo(object):
                     break
 
         hess = -(hess + hess.T) / 2.
-        mass = np.array([self.atoms[i].mass for i in index], dtype=float)
-        hess /= np.sqrt(np.outer(mass, mass))
         self._diagonalize(index, hess)
 
     def _read_hess_xml(self):
@@ -219,6 +217,11 @@ class _Thermo(object):
 
         tree = ET.parse(self.outcar)
         root = tree.getroot()
+
+        vasp_mass = {}
+
+        for element in root.find("atominfo/array[@name='atomtypes']/set"):
+            vasp_mass[element[1].text.strip()] = float(element[2].text)
 
         selective = np.ones((len(self.atoms), 3), dtype=bool)
         constblock = root.find('structure[@name="initialpos"]/varray[@name="selective"]')
@@ -236,9 +239,18 @@ class _Thermo(object):
         for i, v in enumerate(root.find('calculation/dynmat/varray[@name="hessian"]')):
             hess[i] = -np.array([float(val) for val in v.text.split()])
 
+        vasp_massvec = np.zeros(len(index), dtype=float)
+        for i, j in enumerate(index):
+            vasp_massvec[i] = vasp_mass[self.atoms[j].symbol]
+
+        hess *= np.sqrt(np.outer(vasp_massvec, vasp_massvec))
+
         self._diagonalize(index, hess)
 
     def _diagonalize(self, index, hess):
+        mass = np.array([self.atoms[i].mass for i in index], dtype=float)
+        hess /= np.sqrt(np.outer(mass, mass))
+
         # Temporary work around: My test system OUTCARs include some
         # metal atoms in the hessian, this seems to cause some problems
         # with the MKM. So, here I'm taking only the non-metal part
