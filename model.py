@@ -19,24 +19,37 @@ from copy import copy
 
 class Reaction(object):
     def __init__(self, reactants, products, ts=None, method='EQUIL', S0=1., \
-            adsorption=False):
+            adsorption=False, vacancy=None):
         if isinstance(reactants, _Thermo):
             self.reactants = _Reactants([reactants])
         elif isinstance(reactants, _Reactants):
             self.reactants = reactants
         else:
             raise NotImplementedError
+
         if isinstance(products, _Thermo):
             self.products = _Reactants([products])
         elif isinstance(products, _Reactants):
             self.products = products
         else:
             raise NotImplementedError
+
         self.species = []
+        netcoord = 0
         for species in self.reactants:
-            self.species.append(species)
+            if species not in self.species:
+                self.species.append(species)
+            netcoord -= species.coord
         for species in self.products:
-            self.species.append(species)
+            if species not in self.species:
+                self.species.append(species)
+            netcoord += species.coord
+
+        if netcoord > 0:
+            self.reactants += netcoord * vacancy
+        elif netcoord < 0:
+            self.products += -netcoord * vacancy
+
         self.ts = None
         if ts is not None:
             if isinstance(ts, _Thermo):
@@ -54,7 +67,7 @@ class Reaction(object):
         self.adsorption = adsorption
         self.method = method
         if isinstance(self.method, str):
-            self.method =self.method.upper()
+            self.method = self.method.upper()
         if self.adsorption and self.method not in ['EQUIL', 'CT']:
             raise ValueError, "Method {} unrecognized!".format(self.method)
         self.S0 = S0
@@ -127,7 +140,7 @@ class Reaction(object):
         return self.krev
 
     def _calc_keq(self, T):
-        self.keq = np.exp(-self.dH / (kB * T) + self.dS / kB) \
+        self.keq = sym.exp(-self.dH / (kB * T) + self.dS / kB) \
                 * self.products.get_reference_state() \
                 / self.reactants.get_reference_state() \
                 * self.scale['kfor'] / self.scale['krev']
@@ -160,9 +173,51 @@ class Reaction(object):
         string += self.products.__repr__()
         return string
 
+#class DummyReaction(Reaction):
+#    def __init__(self, reactants, products, ts=None, method='EQUIL', S0=1., 
+#            vacancy=None, dH=None, dS=None, dH_act=None, dS_act=None):
+#        Reaction.__init__(self, reactants, products, ts, method, S0, adsorption, 
+#                vacancy)
+#        self.dH_in = dH
+#        self.dS_in = dS
+#        self.dH_act_in = dH_act
+#        self.dS_act_in = dS_act
+#
+#    def _calc_keq(self, T):
+#        if self.
+#        self.keq = sym.exp(-self.dH / (kB * T) + self.dS / kB) \
+#                * self.products.get_reference_state() \
+#                / self.reactants.get_reference_state() \
+#                * self.scale['kfor'] / self.scale['krev']
+#
+#    def _calc_kfor(self, T, N0):
+#        if self.ts is None:
+#            if self.method == 'EQUIL':
+#                self.kfor = _k * T / _hplanck
+#                if self.keq < 1:
+#                    self.kfor *= self.keq * self.scale['krev'] / self.scale['kfor']
+#            elif self.method == 'CT':
+#                # Collision Theory
+#                # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
+#                self.kfor = (1000 * self.S0 * _Nav / N0) * np.sqrt(_k * T * kg \
+#                        / (2 * np.pi * self.reactants.get_mass()))
+#        else:
+#            #Transition State Theory
+#            self.kfor = (_k * T / _hplanck) * np.exp(-self.dH_act / (kB * T) \
+#                    + self.dS_act / kB) * self.ts.get_reference_state() \
+#                    / self.reactants.get_reference_state()
+#        self.kfor *= self.scale['kfor']
+#
+#    def _calc_krev(self, T, N0):
+#        self.krev = self.kfor / self.keq
+#   
+#        
+
+
 class Model(object):
     def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
-            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None):
+            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None,
+            coverage_symbols=None):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -190,6 +245,7 @@ class Model(object):
         self.nz = nz
         self.shape = shape
         self.D = D
+        self.coverage_symbols = coverage_symbols
 
         # Do we need to consider diffusion?
         self.diffusion = False
@@ -267,22 +323,28 @@ class Model(object):
             for species in reaction.products:
                 rate_rev *= self.symbols_dict[species]
                 rate_count[species] += 1
+            if self.trans_cov_symbols is not None:
+                if isinstance(rate_for, sym.Basic):
+                    rate_for = rate_for.subs(self.trans_cov_symbols)
+                if isinstance(rate_rev, sym.Basic):
+                    rate_rev = rate_rev.subs(self.trans_cov_symbols)
             if reaction.adsorption:
-                for species in reaction.species:
+                for species in reaction.reactants:
                     if isinstance(species, Liquid):
                         rate_count[species] *= self.nsites / self.dV[0]
                     elif isinstance(species, Gas):
                         rate_count[species] *= self.nsites / self.V
             self.rates.append(rate_for - rate_rev)
-#            self.rates_exec.append(sym.lambdify(self.symbols, rate_for - rate_rev))
             self.rate_count.append(rate_count)
             self.is_rate_ads.append(reaction.adsorption)
 
     def rate_calc(self, U):
-        r = np.zeros_like(self.rates_exec, dtype=float)
-        for i in xrange(len(self.reactions)):
-            r[i] = self.rates_exec[i](*U)
-        return r
+        self.update(U)
+        return self.rates_last
+#        r = np.zeros_like(self.rates_exec, dtype=float)
+#        for i in xrange(len(self.reactions)):
+#            r[i] = self.rates_exec[i](*U)
+#        return r
 
     def set_initial_conditions(self, U0):
         self.U0 = U0
@@ -327,7 +389,7 @@ class Model(object):
                     M[i] = 0
 #                    self.M[i, i] = 0
                 i += 1
-        self.symbols_all = sym.symbols('x0:{}'.format(size))
+        self.symbols_all = sym.symbols('modelparam0:{}'.format(size))
         self.symbols_dict = {}
         self.symbols = []
         i = 0
@@ -350,7 +412,14 @@ class Model(object):
                 if species not in self.fixed:
                     self.symbols.append(self.symbols_all[i])
                 i += 1
-        self.M = np.zeros((len(self.symbols), len(self.symbols)), dtype=int)
+        self.nsymbols = len(self.symbols)
+        self.trans_cov_symbols = None
+        if self.coverage_symbols is not None:
+            self.trans_cov_symbols = {}
+            for species, symbol in self.coverage_symbols.iteritems():
+                self.trans_cov_symbols[symbol] = self.symbols_dict[species]
+            
+        self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
         for i, symboli in enumerate(self.symbols_all):
             for j, symbolj in enumerate(self.symbols):
                 if symboli == symbolj:
@@ -374,7 +443,6 @@ class Model(object):
                     f = 0
                     diff = self.D[species] / self.zi[i]
                     if i > 0:
-#                        if not (i == self.nz - 1 and species in self.fixed):
                         f += diff * (self.symbols_dict[(species, i-1)] \
                                 - self.symbols_dict[(species, i)]) / self.dz[i-1]
                     if i < self.nz - 1:
@@ -386,7 +454,6 @@ class Model(object):
                                 f += self.rate_count[j][species] * rate
                     if not (i == self.nz - 1 and species in self.fixed):
                         self.f_sym.append(f)
-#                    self.f_exec.append(sym.lambdify(self.symbols, f))
                 else:
                     continue
             elif isinstance(species, Gas):
@@ -405,7 +472,6 @@ class Model(object):
                 self.f_sym.append(f)
             else:
                 assert f == 0, "Fixed species rate of change not zero!"
-#            self.f_exec.append(sym.lambdify(self.symbols, f))
 
         subs = {}
         for species in self.species:
@@ -414,46 +480,63 @@ class Model(object):
                     species = (species, self.nz - 1)
                 subs[self.symbols_dict[species]] = self.U0[species]
 
-        self.f_exec = []
         for i, f in enumerate(self.f_sym):
             self.f_sym[i] = f.subs(subs)
-            self.f_exec.append(sym.lambdify(self.symbols, self.f_sym[i]))
-        self.jac_exec = []
-        for f in self.f_sym:
-            jac_exec = []
-            for symbol in self.symbols:
-                jac_exec.append(sym.lambdify(self.symbols, sym.diff(f, \
-                        symbol)))
-            self.jac_exec.append(jac_exec)
-        self.rates_exec = []
+        self.jac_sym = np.zeros((self.nsymbols, self.nsymbols), dtype=object)
+        for i, f in enumerate(self.f_sym):
+            for j, symbol in enumerate(self.symbols):
+                self.jac_sym[i, j] = sym.diff(f, symbol)
         for i, r in enumerate(self.rates):
             self.rates[i] = r.subs(subs)
-            self.rates_exec.append(sym.lambdify(self.symbols, self.rates[i]))
+
+        self.setup_execs()
         U0 = []
         for symbol in self.symbols:
             for species, isymbol in self.symbols_dict.iteritems():
                 if symbol == isymbol:
                     U0.append(self.U0[species])
                     break
-#        for species in self.species:
-#            U0.append(self.U0[species])
+        self.last_x = np.zeros_like(U0, dtype=float)
+        self.update(np.array(U0))
         self.model = Implicit_Problem(self.res, U0, self.f(U0), 0.)
         self.model.jac = self.jac
 
+    def setup_execs(self):
+        expressions = []
+        expressions.extend(self.f_sym)
+        expressions.extend(self.jac_sym.reshape(self.nsymbols**2))
+        expressions.extend(self.rates)
+
+        sub, red = sym.cse(expressions)
+
+        self.subexp = []
+        subsym = []
+        for xi, val in sub:
+            self.subexp.append(sym.lambdify(self.symbols + subsym, val, modules="numpy"))
+            subsym.append(xi)
+
+        self.execs = [sym.lambdify(self.symbols + subsym, ired, modules="numpy") \
+                for ired in red]
+
+    def update(self, x):
+        if (x != self.last_x).any():
+            self.last_x = x
+            out = np.zeros(len(self.execs), dtype=float)
+            for expression in self.subexp:
+                x = np.append(x, expression(*x))
+            for i, expression in enumerate(self.execs):
+                out[i] = expression(*x)
+            self.f_last = out[:self.nsymbols]
+            self.jac_last = out[self.nsymbols:self.nsymbols**2 + self.nsymbols].reshape(self.nsymbols, self.nsymbols)
+            self.rates_last = out[-len(self.rates):]
 
     def f(self, x, t=None):
-        y = np.zeros_like(self.f_exec, dtype=float)
-        for i in xrange(len(self.symbols)):
-            y[i] = self.f_exec[i](*x)
-        return y
+        self.update(x)
+        return self.f_last
 
     def jac(self, c, t, y, yd):
-        jac = np.zeros_like(self.jac_exec, dtype=float)
-        for i in xrange(len(self.symbols)):
-            for j in xrange(len(self.symbols)):
-                jac[i, j] = self.jac_exec[i][j](*y)
-        jac -= c * self.M
-        return jac
+        self.update(y)
+        return self.jac_last - c * self.M
 
     def mas(self):
         return self.M
@@ -489,18 +572,6 @@ class Model(object):
                     if symbol == isymbol:
                         Ui[species] = self.U1[i][j]
                         dUi[species] = dU1[j]
-#            for species in self.species:
-#                if isinstance(species, Liquid):
-#                    for k in xrange(self.nz):
-#                        Ui[(species, k)] = self.U1[i][j]
-#                        dUi[(species, k)] = dU1[j]
-#                        j += 1
-#                    Ui[species] = self.U1[i][j-1]
-#                    dUi[species] = dU1[j-1]
-#                else:
-#                    Ui[species] = self.U1[i][j]
-#                    dUi[species] = dU1[j]
-#                    j += 1
             self.U.append(Ui)
             self.dU.append(dUi)
 

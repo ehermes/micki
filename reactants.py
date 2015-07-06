@@ -49,6 +49,8 @@ class _Thermo(object):
         self.Erot = None
         self.Evib = None
         self.Htot = None
+        self.coverage_dependence = 0.
+        self.coord = 0
 
         self.scale = {}
         self.scale_params = ['Stot', 'Selec', 'Strans2D', 'Strans', 'Srot', 'Svib', \
@@ -71,6 +73,8 @@ class _Thermo(object):
         self.T = T
         self._calc_q(T)
         self.scale_old = self.scale.copy()
+        self.Etot += self.coverage_dependence
+        self.Htot += self.coverage_dependence
 
     def is_update_needed(self, T):
         needed = True
@@ -315,7 +319,7 @@ class _Fluid(_Thermo):
     """Master object for both liquids and gasses"""
     def __init__(self, outcar, linear=False, symm=1, spin=0., \
             label=None, eref=None, rhoref=1.):
-        super(_Fluid, self).__init__(outcar, linear, symm, \
+        _Thermo.__init__(self, outcar, linear, symm, \
                 spin, False, label, eref, None)
         self.rho0 = rhoref
         assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
@@ -343,17 +347,18 @@ class Gas(_Fluid):
 
 class Liquid(_Fluid):
     def _calc_q(self, T):
-        super(Liquid, self)._calc_q(T)
+        _Fluid._calc_q(T)
         self.Stot += kB * np.log(kB * T * mol / (100 * Pascal * m**3)) - 8.7291e-4
 
 
 class Adsorbate(_Thermo):
     def __init__(self, outcar, spin=0., ts=False, coord=1, label=None, \
-            eref=None, metal=None):
-        super(Adsorbate, self).__init__(outcar, False, None, \
+            eref=None, metal=None, coverage_dependence=0.):
+        _Thermo.__init__(self, outcar, False, None, \
                 spin, ts, label, eref, metal)
         assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
         self.coord = coord
+        self.coverage_dependence = coverage_dependence
 
     def get_reference_state(self):
         return 1.
@@ -379,7 +384,7 @@ class _DummyThermo(_Thermo):
         self.spin = spin
         self.ts = ts
         self.label = label
-        self.freqs = freqs
+        self.freqs = np.array(freqs) * _hplanck * 100 * J / _c
         self.rho0 = rhoref
         self.qtot = None
         self.qtrans = None
@@ -412,7 +417,7 @@ class DummyFluid(_DummyThermo):
         self.atoms = read(geometry)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
         self.atoms.set_masses(self.mass)
-        super(DummyFluid, self).__init__(linear, symm, spin, ts, freqs, label, E, rhoref)
+        _DummyThermo.__init__(self, linear, symm, spin, ts, freqs, label, E, rhoref)
 
     def copy(self):
         return self.__class__(self.geometry, self.linear, self.symm, self.spin, \
@@ -430,9 +435,11 @@ class DummyFluid(_DummyThermo):
 
 
 class DummyAdsorbate(_DummyThermo):
-    def __init__(self, label, spin=0., ts=False, coord=1, freqs=[], E=0):
+    def __init__(self, label, spin=0., ts=False, coord=1, freqs=[], E=0, \
+            coverage_dependence=0.):
         self.coord = coord
-        super(DummyAdsorbate, self).__init__(False, 1, spin, ts, freqs, label, E, 1.)
+        _DummyThermo.__init__(False, 1, spin, ts, freqs, label, E, 1.)
+        self.coverage_dependence = coverage_dependence
 
     def _calc_q(self, T):
         self._calc_qvib(T)
@@ -581,6 +588,7 @@ class _Reactants(object):
                     self.elements[symbol] = 1
         else:
             raise NotImplementedError
+        return self
 
     def __add__(self, other):
         return _Reactants([self, other])
@@ -589,12 +597,14 @@ class _Reactants(object):
 #        return new
 
     def __imul__(self, factor):
-        raise ValueError, "Reactants can only be multiplied by an integer"
+        assert isinstance(factor, int) and factor > 0
         self.species *= factor
         for key in self.elements:
             self.elements[key] *= factor
+        return self
 
     def __mul__(self, factor):
+        assert isinstance(factor, int) and factor > 0
         new = self.copy()
         new *= factor
         return new
