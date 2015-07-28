@@ -5,7 +5,7 @@ import numpy as np
 
 from ase.io import read
 
-from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal
+from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal, _Nav
 
 from masses import masses
 
@@ -330,6 +330,7 @@ class _Fluid(_Thermo):
     def copy(self):
         return self.__class__(self.outcar, self.linear, self.symm, self.spin, \
                 self.label, self.eref)
+
     def _calc_q(self, T):
         self._calc_qelec(T)
         self._calc_qtrans(T)
@@ -347,7 +348,7 @@ class Gas(_Fluid):
 
 class Liquid(_Fluid):
     def _calc_q(self, T):
-        _Fluid._calc_q(T)
+        _Fluid._calc_q(self, T)
         self.Stot += kB * np.log(kB * T * mol / (100 * Pascal * m**3)) - 8.7291e-4
 
 
@@ -384,7 +385,7 @@ class _DummyThermo(_Thermo):
         self.spin = spin
         self.ts = ts
         self.label = label
-        self.freqs = np.array(freqs) * _hplanck * 100 * J / _c
+        self.freqs = np.array(freqs) * _hplanck * 100 * J * _c
         self.rho0 = rhoref
         self.qtot = None
         self.qtrans = None
@@ -406,18 +407,42 @@ class _DummyThermo(_Thermo):
         for param in self.scale_params:
             self.scale[param] = 1.0
         self.scale_old = self.scale.copy()
+        self.coverage_dependence = 0
+
+    def _calc_qvib(self, T, ncut=0):
+        self.Evib = sum(self.freqs[ncut:])/2. * self.scale['Evib']
+        thetavib = self.freqs[ncut:] / kB
+        x = self.freqs[ncut:] / (kB * T)
+        self.Svib = kB * np.sum(x / (np.exp(x) - 1) - np.log(1-np.exp(-x))) * self.scale['Svib']
+
+#        self.qvib = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
+#        self.Svib = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) \
+#                - np.log(1. - np.exp(-thetavib/T))) * self.scale['Svib']
 
     def get_reference_state(self):
         return self.rho0
 
 class DummyFluid(_DummyThermo):
     def __init__(self, geometry, linear=False, symm=1, spin=0., ts=False, \
-            freqs=[], label=None, E=0., rhoref=1.):
+            freqs=[], label=None, E=0., rhoref=1., Stot=None, monatomic=False,
+            H=None):
         self.geometry = geometry
         self.atoms = read(geometry)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
         self.atoms.set_masses(self.mass)
+        self.Stot_in = Stot
+        if self.Stot_in is not None:
+            self.Stot_in *= J / _Nav
+        self.monatomic = monatomic
+        self.coord = 0
+        self.H_in = H
         _DummyThermo.__init__(self, linear, symm, spin, ts, freqs, label, E, rhoref)
+        if self.linear and len(self.freqs) < 3 * len(self.atoms) - 5:
+            for i in range(3 * len(self.atoms) - 5 - len(self.freqs)):
+                self.freqs = np.append(self.freqs, 200 * _hplanck * 100 * J * _c)
+        elif not self.linear and len(self.freqs) < 3 * len(self.atoms) - 6:
+            for i in range(3 * len(self.atoms) - 6 - len(self.freqs)):
+                self.freqs = np.append(self.freqs, 200 * _hplanck * 100 * J * _c)
 
     def copy(self):
         return self.__class__(self.geometry, self.linear, self.symm, self.spin, \
@@ -425,29 +450,73 @@ class DummyFluid(_DummyThermo):
 
     def _calc_q(self, T):
         self._calc_qelec(T)
-        self._calc_qtrans(T)
-        self._calc_qrot(T)
-        self._calc_qvib(T)
-        self.qtot = self.qtrans * self.qrot * self.qvib
+        if len(self.atoms) > 0:
+            self._calc_qtrans(T)
+        else:
+            self.Strans = 0
+            self.Etrans = 0
+        if self.monatomic:
+            self.Erot = 0
+            self.Evib = 0
+            self.Srot = 0
+            self.Svib = 0
+        else:
+            self._calc_qrot(T)
+            self._calc_qvib(T)
         self.Etot = self.Eelec + self.Etrans + self.Erot + self.Evib
-        self.Htot = self.Etot + kB * T
+        if self.H_in is not None:
+            self.Htot = self.H_in
+        else:
+            self.Htot = self.Etot + kB * T
         self.Stot = self.Selec + self.Strans + self.Srot + self.Svib
 
 
 class DummyAdsorbate(_DummyThermo):
     def __init__(self, label, spin=0., ts=False, coord=1, freqs=[], E=0, \
-            coverage_dependence=0.):
+            coverage_dependence=0., gas=None, Floc=1., natoms=None, ZPE=None):
         self.coord = coord
-        _DummyThermo.__init__(False, 1, spin, ts, freqs, label, E, 1.)
+        _DummyThermo.__init__(self, False, 1, spin, ts, freqs, label, E, 1.)
         self.coverage_dependence = coverage_dependence
+        self.gas = gas
+        if self.gas is not None:
+            self.atoms = self.gas.atoms
+        self.Floc = Floc
+        self.natoms = natoms
+        self.ZPE = ZPE
+#        if self.ts and len(self.freqs) < 3 * self.natoms - 1:
+#            for i in range(3 * self.natoms - 1 - len(self.freqs)):
+#                self.freqs = np.append(self.freqs, 200 * _hplanck * 100 * J * _c)
+#        elif not self.ts and len(self.freqs) < 3 * self.natoms:
+#            for i in range(3 * self.natoms - len(self.freqs)):
+#                self.freqs = np.append(self.freqs, 200 * _hplanck * 100 * J * _c)
 
     def _calc_q(self, T):
         self._calc_qvib(T)
         self._calc_qelec(T)
-        self.qtot = self.qvib
+        if self.gas is not None:
+            self.gas._calc_q(T)
+            if self.ZPE is not None:
+                self.gas.Evib = self.Evib - self.ZPE
+            if self.gas.Stot_in is not None:
+                self.Stot_gas = self.gas.Stot_in
+            else:
+                self.Stot_gas = (self.gas.Strans + self.gas.Srot 
+                        + self.gas.Svib + self.gas.Selec)
         self.Etot = self.Eelec + self.Evib
         self.Htot = self.Etot + kB * T
+        if self.gas is not None:
+            self.Htot -= self.gas.Evib
         self.Stot = self.Selec + self.Svib
+
+    def get_S_gas(self, T):
+        assert self.gas is not None
+        self.update(T)
+        return self.Floc * (self.Stot_gas - self.gas.Strans)
+    
+    def get_dZPE(self, T):
+        self.gas.update(T)
+        self.update(T)
+        return self.Evib - self.gas.Evib
 
     def copy(self):
         return self.__class__(self.label, self.spin, self.ts, self.coord, \
@@ -457,46 +526,6 @@ class DummyAdsorbate(_DummyThermo):
 class Shomate(_Thermo):
     def __init__(self):
         raise NotImplementedError
-
-#    def __init__(self, label, elements, shomatepars, fluid, T, coord=1):
-#        self.label = label
-#        self.elements = elements
-#        self.shomatepars = shomatepars
-#        self.A = shomatepars[0]
-#        self.B = shomatepars[1]
-#        self.C = shomatepars[2]
-#        self.D = shomatepars[3]
-#        self.E = shomatepars[4]
-#        self.F = shomatepars[5]
-#        self.G = shomatepars[6]
-#        self.T = T
-#        self.fluid = fluid
-#        self.coord = coord
-#
-#    def get_enthalpy(self, T=None):
-#        if T is None:
-#            T = self.T
-#        t = T / 1000
-#        H = self.A*t + self.B*t**2/2. + self.C*t**3/3. + self.D*t**4/4. \
-#                - self.E/t + self.F
-#        H *= kJ / mol
-#        return H
-#
-#    def get_entropy(self, T=None, P=None):
-#        if T is None:
-#            T = self.T
-#        t = T / 1000
-#        S = self.A*np.log(t) + self.B*t + self.C*t**2/2. + self.D*t**3/3. \
-#                - self.E/(2*t**2) + self.G
-#        S *= J / mol
-#        return S
-#
-#    def copy(self):
-#        return self.__class__(self.label, self.shomatepars, self.fluid, self.T)
-#
-#    def __repr__(self):
-#        return self.label
-
 
 class _Reactants(object):
     def __init__(self, species):
@@ -524,6 +553,8 @@ class _Reactants(object):
                             self.elements[symbol] += other.elements[symbol]
                         else:
                             self.elements[symbol] = other.elements[symbol]
+                elif isinstance(other, DummyAdsorbate):
+                    pass
                 else:
                     for symbol in other.atoms.get_chemical_symbols():
                         if symbol in self.elements:
@@ -592,9 +623,6 @@ class _Reactants(object):
 
     def __add__(self, other):
         return _Reactants([self, other])
-#        new = self.copy()
-#        new += other
-#        return new
 
     def __imul__(self, factor):
         assert isinstance(factor, int) and factor > 0

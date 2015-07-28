@@ -9,6 +9,7 @@ from ase.units import kB, _hplanck, kg, _k, _Nav, mol
 import sympy as sym
 
 from mkm.reactants import _Thermo, _Fluid, _Reactants, Gas, Liquid, Adsorbate
+from mkm.reactants import DummyFluid, DummyAdsorbate
 
 from assimulo.problem import Implicit_Problem
 
@@ -173,45 +174,67 @@ class Reaction(object):
         string += self.products.__repr__()
         return string
 
-#class DummyReaction(Reaction):
-#    def __init__(self, reactants, products, ts=None, method='EQUIL', S0=1., 
-#            vacancy=None, dH=None, dS=None, dH_act=None, dS_act=None):
-#        Reaction.__init__(self, reactants, products, ts, method, S0, adsorption, 
-#                vacancy)
-#        self.dH_in = dH
-#        self.dS_in = dS
-#        self.dH_act_in = dH_act
-#        self.dS_act_in = dS_act
-#
-#    def _calc_keq(self, T):
-#        if self.
-#        self.keq = sym.exp(-self.dH / (kB * T) + self.dS / kB) \
-#                * self.products.get_reference_state() \
-#                / self.reactants.get_reference_state() \
-#                * self.scale['kfor'] / self.scale['krev']
-#
-#    def _calc_kfor(self, T, N0):
-#        if self.ts is None:
-#            if self.method == 'EQUIL':
-#                self.kfor = _k * T / _hplanck
-#                if self.keq < 1:
-#                    self.kfor *= self.keq * self.scale['krev'] / self.scale['kfor']
-#            elif self.method == 'CT':
-#                # Collision Theory
-#                # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
-#                self.kfor = (1000 * self.S0 * _Nav / N0) * np.sqrt(_k * T * kg \
-#                        / (2 * np.pi * self.reactants.get_mass()))
-#        else:
-#            #Transition State Theory
-#            self.kfor = (_k * T / _hplanck) * np.exp(-self.dH_act / (kB * T) \
-#                    + self.dS_act / kB) * self.ts.get_reference_state() \
-#                    / self.reactants.get_reference_state()
-#        self.kfor *= self.scale['kfor']
-#
-#    def _calc_krev(self, T, N0):
-#        self.krev = self.kfor / self.keq
-#   
-#        
+class DummyReaction(Reaction):
+    def __init__(self, reactants, products, ts=None, method='EQUIL', S0=1., 
+            vacancy=None, Ei=None, A=None, adsorption=False):
+        Reaction.__init__(self, reactants, products, ts, method, S0, adsorption, 
+                vacancy)
+        self.Ei = Ei
+        self.A = A
+
+    def _calc_keq(self, T):
+        self.dS = 0.
+        self.dH = self.products.get_H(T) - self.reactants.get_H(T)
+        for species in self.reactants:
+            if isinstance(species, DummyFluid):
+                self.dS -= species.Stot
+            elif isinstance(species, DummyAdsorbate):
+                self.dS -= species.get_S_gas(T)
+            else:
+                raise ValueError, "Must pass dummy object!"
+        for species in self.products:
+            if isinstance(species, DummyFluid):
+                self.dS += species.Stot
+            elif isinstance(species, DummyAdsorbate):
+                self.dS += species.get_S_gas(T)
+            else:
+                raise ValueError, "Must pass dummy object!"
+        self.keq = sym.exp(-self.dH / (kB * T) + self.dS / kB) \
+                * self.products.get_reference_state() \
+                / self.reactants.get_reference_state() \
+                * self.scale['kfor'] / self.scale['krev']
+
+    def _calc_kfor(self, T, N0):
+        if self.method == 'CT':
+            self.kfor = (1000 * self.S0 * _Nav / N0) * np.sqrt(_k * T * kg \
+                    / (2 * np.pi * self.reactants.get_mass()))
+        else:
+            if self.A is not None:
+                A = self.A
+            else:
+                dS_act = 0
+                for ts in self.ts:
+                    ts.update(T)
+                    dS_act += ts.Svib
+                for reactant in self.reactants:
+                    reactant.update(T)
+                    dS_act -= reactant.Svib
+                A = (_k * T / _hplanck) * np.exp(dS_act / kB)
+
+            if self.Ei is not None:
+                Ei = self.Ei
+            else:
+                Ei = 0
+                for ts in self.ts:
+                    ts.update(T)
+                    Ei += ts.Eelec + ts.Evib
+                for reactant in self.reactants:
+                    reactant.update(T)
+                    Ei -= reactant.Eelec + reactant.Evib
+            self.kfor = A * np.exp(-Ei / (kB * T))
+
+    def _calc_krev(self, T, N0):
+        self.krev = self.kfor / self.keq        
 
 
 class Model(object):
@@ -267,10 +290,10 @@ class Model(object):
                 self.nliquid += 1
                 assert self.solvent is not None, "Must specify solvent!"
         for species in self.species:
-            if isinstance(species, Gas):
+            if isinstance(species, Gas) or isinstance(species, DummyFluid):
                 newspecies.append(species)
         for species in self.species:
-            if isinstance(species, Adsorbate):
+            if isinstance(species, Adsorbate) or isinstance(species, DummyAdsorbate):
                 if species not in self.steady_state and species is not self.vacancy:
                     newspecies.append(species)
         for species in self.steady_state:
@@ -332,7 +355,7 @@ class Model(object):
                 for species in reaction.reactants:
                     if isinstance(species, Liquid):
                         rate_count[species] *= self.nsites / self.dV[0]
-                    elif isinstance(species, Gas):
+                    elif isinstance(species, (Gas, DummyFluid)):
                         rate_count[species] *= self.nsites / self.V
             self.rates.append(rate_for - rate_rev)
             self.rate_count.append(rate_count)
@@ -354,7 +377,8 @@ class Model(object):
                 species = species[0]
             if species not in self.species:
                 raise ValueError, "Unknown species!"
-            if isinstance(species, Adsorbate) and species is not self.vacancy:
+            if (isinstance(species, (Adsorbate, DummyAdsorbate)) 
+                    and species is not self.vacancy):
                 occsites += self.U0[species] * species.coord
             elif isinstance(species, Liquid):
                 if (species, self.nz - 1) in self.U0:
@@ -420,10 +444,12 @@ class Model(object):
                 self.trans_cov_symbols[symbol] = self.symbols_dict[species]
             
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
+        algvar = np.zeros(self.nsymbols, dtype=bool)
         for i, symboli in enumerate(self.symbols_all):
             for j, symbolj in enumerate(self.symbols):
                 if symboli == symbolj:
                     self.M[j, j] = M[i]
+                    algvar[j] = M[i]
 
         # Volume of grid thickness per ads. site
         if self.diffusion:
@@ -456,11 +482,12 @@ class Model(object):
                         self.f_sym.append(f)
                 else:
                     continue
-            elif isinstance(species, Gas):
+            elif isinstance(species, (Gas, DummyFluid)):
                 if species not in self.fixed:
                     for j, rate in enumerate(self.rates):
                         f += self.rate_count[j][species] * rate
-            elif isinstance(species, Adsorbate) and species is not self.vacancy:
+            elif (isinstance(species, (Adsorbate, DummyAdsorbate)) 
+                    and species is not self.vacancy):
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
             elif species is self.vacancy:
@@ -481,13 +508,13 @@ class Model(object):
                 subs[self.symbols_dict[species]] = self.U0[species]
 
         for i, f in enumerate(self.f_sym):
-            self.f_sym[i] = f.subs(subs)
+            self.f_sym[i] = sym.sympify(f).subs(subs)
         self.jac_sym = np.zeros((self.nsymbols, self.nsymbols), dtype=object)
         for i, f in enumerate(self.f_sym):
             for j, symbol in enumerate(self.symbols):
                 self.jac_sym[i, j] = sym.diff(f, symbol)
         for i, r in enumerate(self.rates):
-            self.rates[i] = r.subs(subs)
+            self.rates[i] = sym.sympify(r).subs(subs)
 
         self.setup_execs()
         U0 = []
@@ -500,6 +527,11 @@ class Model(object):
         self.update(np.array(U0))
         self.model = Implicit_Problem(self.res, U0, self.f(U0), 0.)
         self.model.jac = self.jac
+#        self.model.atol = 1e-16
+#        self.model.rtol = 1e-12
+        self.model.algvar = algvar
+        self.model.suppress_alg = True
+        self.model.usesens = True
 
     def setup_execs(self):
         expressions = []
