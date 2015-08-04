@@ -19,7 +19,7 @@ from copy import copy
 
 
 class Reaction(object):
-    def __init__(self, reactants, products, ts=None, method='EQUIL', S0=1., \
+    def __init__(self, reactants, products, ts=None, method=None, S0=1., \
             adsorption=False, vacancy=None):
         if isinstance(reactants, _Thermo):
             self.reactants = _Reactants([reactants])
@@ -66,11 +66,17 @@ class Reaction(object):
 #            if self.ts is not None:
 #                assert self.reactants.elements[element] == self.ts.elements[element]
         self.adsorption = adsorption
-        self.method = method
+        if method is None:
+            if self.ts is not None:
+                self.method = 'TST'
+            else:
+                self.method = 'EQUIL'
+        else:
+            self.method = method
         if isinstance(self.method, str):
             self.method = self.method.upper()
         if self.adsorption and self.method not in ['EQUIL', 'CT']:
-            raise ValueError, "Method {} unrecognized!".format(self.method)
+            raise ValueError, "Method {} unsupported for adsorption reactions!".format(self.method)
         self.S0 = S0
         self.keq = None
         self.kfor = None
@@ -117,6 +123,9 @@ class Reaction(object):
         self.scale_old = self.scale.copy()
 
     def is_update_needed(self, T, N0):
+        for species in self.species:
+            if species.is_update_needed(T):
+                return True
         if self.keq is None:
             return True
         if T is not None and T != self.T:
@@ -148,20 +157,26 @@ class Reaction(object):
 
     def _calc_kfor(self, T, N0):
         if self.ts is None:
-            if self.method == 'EQUIL':
-                self.kfor = _k * T / _hplanck
-                if self.keq < 1:
-                    self.kfor *= self.keq * self.scale['krev'] / self.scale['kfor']
-            elif self.method == 'CT':
-                # Collision Theory
-                # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
-                self.kfor = (1000 * self.S0 * _Nav / N0) * np.sqrt(_k * T * kg \
-                        / (2 * np.pi * self.reactants.get_mass()))
+            barr = 1
         else:
-            #Transition State Theory
-            self.kfor = (_k * T / _hplanck) * np.exp(-self.dH_act / (kB * T) \
-                    + self.dS_act / kB) * self.ts.get_reference_state() \
+            barr = np.exp(-self.dH_act / (kB * T) + self.dS_act / kB) \
+                    * self.ts.get_reference_state() \
                     / self.reactants.get_reference_state()
+        if self.method == 'EQUIL':
+            self.kfor = _k * T / _hplanck
+            if self.keq < 1:
+                self.kfor *= self.keq * self.scale['krev'] / self.scale['kfor']
+        elif self.method == 'CT':
+            # Collision Theory
+            # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
+            self.kfor = barr * (1000 * self.S0 * _Nav / N0) \
+                    * np.sqrt(_k * T * kg \
+                    / (2 * np.pi * self.reactants.get_mass()))
+        elif self.method == 'TST':
+            #Transition State Theory
+            self.kfor = (_k * T / _hplanck) * barr
+        else:
+            raise ValueError, "Method {} is not recognized!".format(self.method)
         self.kfor *= self.scale['kfor']
 
     def _calc_krev(self, T, N0):
@@ -305,13 +320,20 @@ class Model(object):
         if self.diffusion:
             self.set_up_grid()
 
-        if U0 is not None:
-            self.set_initial_conditions(U0)
+        self.U0 = U0
+
+        if self.U0 is not None:
+            self.set_initial_conditions(self.U0)
 
     def add_species(self, species):
         assert isinstance(species, _Thermo)
         if species not in self.species:
             self.species.append(species)
+    
+    def set_temperature(self, T):
+        self.T = T
+        if self.U0 is not None:
+            self.set_initial_conditions(self.U0)
 
     def set_up_grid(self):
         if self.shape.upper() == 'FLAT':
@@ -525,13 +547,12 @@ class Model(object):
                     break
         self.last_x = np.zeros_like(U0, dtype=float)
         self.update(np.array(U0))
-        self.model = Implicit_Problem(self.res, U0, self.f(U0), 0.)
+        self.model = Implicit_Problem(res=self.res, y0=U0, yd0=self.f(U0), t0=0.)
         self.model.jac = self.jac
 #        self.model.atol = 1e-16
 #        self.model.rtol = 1e-12
         self.model.algvar = algvar
-        self.model.suppress_alg = True
-        self.model.usesens = True
+#        self.model.suppress_alg = True
 
     def setup_execs(self):
         expressions = []
@@ -613,3 +634,9 @@ class Model(object):
                 ri[reaction] = r[j]
             self.r.append(ri)
         return self.U, self.dU, self.r
+    
+    def copy(self):
+        return Model(self.reactions, self.vacancy, self.T, self.V, self.nsites, \
+                self.N0, self.coverage, self.z, self.nz, self.shape, \
+                self.steady_state, self.fixed, self.D, self.solvent, self.U0, \
+                self.coverage_symbols)

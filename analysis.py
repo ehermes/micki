@@ -2,10 +2,11 @@
 
 import numpy as np
 from ase.units import kB
+from mkm.reactants import Adsorbate, _Fluid
 from mkm.model import Model
 
 class ModelAnalysis(object):
-    def __init__(self, model, product_reaction, Uequil, tol=1e-6, dt=3600):
+    def __init__(self, model, product_reaction, Uequil, tol=1e-3, dt=3600):
         self.model = model
         self.product_reaction = product_reaction
         self.Uequil = Uequil
@@ -16,59 +17,144 @@ class ModelAnalysis(object):
 
         self.model.set_initial_conditions(self.Uequil)
 
-        self.U, self.dU, self.r = self.model.solve(self.dt, self.dt)
+        self.U, self.dU, self.r = self.model.solve(self.dt, 4)
         
         self.check_converged(self.U, self.dU, self.r)
 
-    def campbell_rate_control(self, test_reaction, scale=0.05):
+    def campbell_rate_control(self, test_reaction, scale=0.001):
         assert test_reaction in self.model.reactions
 
-        rmid = self.r[self.product_reaction]
+        rmid = self.r[-1][self.product_reaction]
         kmid = test_reaction.get_kfor(self.model.T, self.model.N0)
 
-        test_reaction.set_scale('kfor', 1 - scale)
-        test_reaction.set_scale('krev', 1 - scale)
+        test_reaction.set_scale('kfor', 1.0 - scale)
+        test_reaction.set_scale('krev', 1.0 - scale)
         klow = test_reaction.get_kfor(self.model.T, self.model.N0)
         self.model.set_initial_conditions(self.Uequil)
-        U1, dU1, r1 = self.model.solve(self.dt, 3)
+        try:
+            U1, dU1, r1 = self.model.solve(self.dt, 4)
+        except:
+            test_reaction.set_scale('kfor', 1.0)
+            test_reaction.set_scale('krev', 1.0)
+            raise
         self.check_converged(U1, dU1, r1)
-        rlow = r1[self.product_reaction]
+        rlow = r1[-1][self.product_reaction]
 
-        test_reaction.set_scale('kfor', 1 + scale)
-        test_reaction.set_scale('krev', 1 + scale)
+        test_reaction.set_scale('kfor', 1.0 + scale)
+        test_reaction.set_scale('krev', 1.0 + scale)
         khigh = test_reaction.get_kfor(self.model.T, self.model.N0)
         self.model.set_initial_conditions(self.Uequil)
-        U2, dU2, r2 = self.model.solve(self.dt, 3)
+        try:
+            U2, dU2, r2 = self.model.solve(self.dt, 4)
+        except:
+            test_reaction.set_scale('kfor', 1.0)
+            test_reaction.set_scale('krev', 1.0)
+            raise
         self.check_converged(U2, dU2, r2)
-        rhigh = r2[self.product_reaction]
+        rhigh = r2[-1][self.product_reaction]
+        test_reaction.set_scale('kfor', 1.0)
+        test_reaction.set_scale('krev', 1.0)
 
         return kmid * (rhigh - rlow) / (rmid * (khigh - klow))
 
-    def thermodynamic_rate_control(self, test_species, scale=0.05):
+    def thermodynamic_rate_control(self, test_species, scale=0.0001):
+        assert isinstance(test_species, Adsorbate)
         assert test_species in self.model.species
         assert test_species not in self.model.fixed
 
-        rmid = self.r[self.product_reaction]
+        rmid = self.r[-1][self.product_reaction]
         T = self.model.T
 
-        test_species.set_scale('Stot', 1 - scale)
-        test_species.set_scale('Htot', 1 - scale)
+        test_species.set_scale('Stot', 1.0 - scale)
+        test_species.set_scale('Htot', 1.0 - scale)
+        self.model.set_initial_conditions(self.Uequil)
+        try:
+            U1, dU1, r1 = self.model.solve(self.dt, 4)
+        except:
+            test_species.set_scale('Stot', 1.0)
+            test_species.set_Scale('Htot', 1.0)
+            raise
         glow = test_species.get_H(T) - T * test_species.get_S(T)
-        self.model.set_initial_conditions(self.Uequil)
-        U1, dU1, r1 = self.model.solve(self.dt, 3)
         self.check_converged(U1, dU1, r1)
-        rlow = r1[self.product_reaction]
+        rlow = r1[-1][self.product_reaction]
 
-        test_species.set_scale('Stot', 1 + scale)
-        test_species.set_scale('Htot', 1 + scale)
-        ghigh = test_species.get_H(T) - T * test_species.get_S(T)
+        test_species.set_scale('Stot', 1.0 + scale)
+        test_species.set_scale('Htot', 1.0 + scale)
         self.model.set_initial_conditions(self.Uequil)
-        U2, dU2, r2 = self.model.solve(self.dt, 3)
+        try:
+            U2, dU2, r2 = self.model.solve(self.dt, 4)
+        except:
+            test_species.set_scale('Stot', 1.0)
+            test_species.set_scale('Htot', 1.0)
+        ghigh = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U2, dU2, r2)
-        rhigh = r2[self.product_reaction]
+        rhigh = r2[-1][self.product_reaction]
+
+        test_species.set_scale('Stot', 1.0)
+        test_species.set_scale('Htot', 1.0)
 
         return (rhigh - rlow) * kB * T / (rmid * (glow - ghigh))
 
+    def activation_barrier(self, dT=0.01):
+        rmid = self.r[-1][self.product_reaction]
+        T = self.model.T
+
+        self.model.set_temperature(T - dT)
+        try:
+            U1, dU1, r1 = self.model.solve(self.dt, 4)
+        except:
+            self.model.set_temperature(T)
+            raise
+        self.check_converged(U1, dU1, r1)
+
+        rlow = r1[-1][self.product_reaction]
+
+        self.model.set_temperature(T + dT)
+        try:
+            U2, dU2, r2 = self.model.solve(self.dt, 4)
+        except:
+            self.model.set_temperature(T)
+            raise
+        self.check_converged(U2, dU2, r2)
+
+        rhigh = r2[-1][self.product_reaction]
+
+        self.model.set_temperature(T)
+        
+        return kB * T**2 * (rhigh - rlow) / (rmid * 2 * dT)
+
+    def rate_order(self, test_species, drho=0.001):
+        assert isinstance(test_species, _Fluid)
+
+        rhomid = self.Uequil[test_species]
+        assert rhomid > 0
+
+        rmid = self.r[-1][self.product_reaction]
+        U0 = self.Uequil.copy()
+        rholow = rhomid * (1.0 - drho)
+        U0[test_species] = rholow
+        self.model.set_initial_conditions(U0)
+        try:
+            U1, dU1, r1 = self.model.solve(self.dt, 4)
+        except:
+            self.model.set_initial_conditions(self.Uequil)
+            raise
+        self.check_converged(U1, dU1, r1)
+        rlow = r1[-1][self.product_reaction]
+
+        rhohigh = rhomid * (1.0 + drho)
+        U0[test_species] = rhohigh
+        self.model.set_initial_conditions(U0)
+        try:
+            U2, dU2, r2 = self.model.solve(self.dt, 4)
+        except:
+            self.model.set_initial_conditions(self.Uequil)
+            raise
+        self.check_converged(U2, dU2, r2)
+        rhigh = r2[-1][self.product_reaction]
+
+        return (rhomid / rmid) * (rhigh - rlow) / (rhohigh - rholow)
+        
     def check_converged(self, *vals):
         for val in vals:
             for i, key in enumerate(val[0]):

@@ -77,17 +77,14 @@ class _Thermo(object):
         self.Htot += self.coverage_dependence
 
     def is_update_needed(self, T):
-        needed = True
-        while needed:
-            if self.qtot is None:
-                break
-            if T is not None and T != self.T:
-                break
-            if np.any([self.scale[param] != self.scale_old[param] \
-                    for param in self.scale_params]):
-                break
-            needed = False
-        return needed
+        if self.qtot is None:
+            return True
+        if T is not None and T != self.T:
+            return True
+        for param in self.scale_params:
+            if self.scale[param] != self.scale_old[param]:
+                return True
+        return False
 
     def get_H(self, T=None):
         self.update(T)
@@ -116,10 +113,10 @@ class _Thermo(object):
             return None
 
     def set_scale(self, param, value):
-        try:
-            self.scale[param] = value
-        except KeyError:
-            print "{} is not a valid scaling parameter name!".format(param)
+        assert param in self.scale_params, \
+                "{} is not a valid scaling parameter name!".format(param)
+        self.scale_old = self.scale.copy()
+        self.scale[param] = value
 
     def _calc_q(self, T):
         raise NotImplementedError
