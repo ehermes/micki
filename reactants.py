@@ -1,19 +1,40 @@
 """This module contains object definitions of species
 and collections of species"""
 
+import copy
+
 import numpy as np
 
 from ase.io import read
 
 from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal, _Nav
 
-from masses import masses
+from micki.masses import masses
 
 
 class _Thermo(object):
-    """Generic thermodynamics object"""
+    """Generic thermodynamics object
+    
+    This is the base object that all reactant objects inherit from.
+    It initializes many parameters and provides methods for calculating
+    modeutions to the partition function from translation, rotation,
+    and vibration."""
+
     def __init__(self, outcar, linear=False, symm=1, spin=0., ts=False, \
             label=None, eref=None, metal=None):
+        self.T = None
+
+        self.mode = ['tot', 'trans', 'trans2D', 'rot', 'vib', 'elec']
+
+        self.q = dict.fromkeys(self.mode)
+        self.S = dict.fromkeys(self.mode)
+        self.E = dict.fromkeys(self.mode)
+        self.H = None
+
+        self.scale = {'E': dict.fromkeys(self.mode, 1.0),
+                      'S': dict.fromkeys(self.mode, 1.0),
+                      'H': 1.0}
+
         self.outcar = outcar
         self.metal = metal
         self.atoms = read(self.outcar, index=0)
@@ -24,46 +45,23 @@ class _Thermo(object):
             self._read_hess_outcar()
         elif self.outcar.endswith('.xml'):
             self._read_hess_xml()
-        self.T = None
         self.potential_energy = self.atoms.get_potential_energy()
         self.linear = linear
         self.symm = symm
         self.spin = spin
         self.ts = ts
         self.label = label
-        self.qtot = None
-        self.qtrans2D = None
-        self.qtrans = None
-        self.qrot = None
-        self.qvib = None
-        self.Stot = None
-        self.Selec = None
-        self.Strans2D = None
-        self.Strans = None
-        self.Srot = None
-        self.Svib = None
-        self.Etot = None
-        self.Eelec = None
-        self.Etrans2D = None
-        self.Etrans = None
-        self.Erot = None
-        self.Evib = None
-        self.Htot = None
         self.coverage_dependence = 0.
         self.coord = 0
 
-        self.scale = {}
-        self.scale_params = ['Stot', 'Selec', 'Strans2D', 'Strans', 'Srot', 'Svib', \
-                'Etot', 'Eelec', 'Etrans2D', 'Etrans', 'Erot', 'Evib', 'Htot']
-        for param in self.scale_params:
-            self.scale[param] = 1.0
-        self.scale_old = self.scale.copy()
+        self.scale_old = copy.deepcopy(self.scale)
 
         if self.eref is not None:
             for symbol in self.atoms.get_chemical_symbols():
                 self.potential_energy -= self.eref[symbol]
 
     def update(self, T=None):
+        """Updates the object's thermodynamic properties"""
         if not self.is_update_needed(T):
             return
 
@@ -72,67 +70,53 @@ class _Thermo(object):
 
         self.T = T
         self._calc_q(T)
-        self.scale_old = self.scale.copy()
-        self.Etot += self.coverage_dependence
-        self.Htot += self.coverage_dependence
+        self.scale_old = copy.deepcopy(self.scale)
+        self.E['tot'] += self.coverage_dependence
+        self.H += self.coverage_dependence
 
     def is_update_needed(self, T):
-        if self.qtot is None:
+        if self.q['tot'] is None:
             return True
         if T is not None and T != self.T:
             return True
-        for param in self.scale_params:
-            if self.scale[param] != self.scale_old[param]:
-                return True
+        if self.scale != self.scale_old:
+            return True
         return False
 
     def get_H(self, T=None):
         self.update(T)
-        return self.Htot * self.scale['Htot']
+        return self.H * self.scale['H']
 
     def get_S(self, T=None):
         self.update(T)
-        return self.Stot * self.scale['Stot']
+        return self.S['tot'] * self.scale['S']['tot']
 
     def get_E(self, T=None):
         self.update(T)
-        return self.Etot * self.scale['Etot']
+        return self.E['tot'] * self.scale['E']['tot']
 
     def get_q(self, T=None):
         self.update(T)
-        return self.qtot
+        return self.q['tot']
 
     def get_reference_state(self):
         raise NotImplementedError
-
-    def get_scale(self, param):
-        try:
-            return self.scale[param]
-        except KeyError:
-            print "{} is not a valid scaling parameter name!".format(param)
-            return None
-
-    def set_scale(self, param, value):
-        assert param in self.scale_params, \
-                "{} is not a valid scaling parameter name!".format(param)
-        self.scale_old = self.scale.copy()
-        self.scale[param] = value
 
     def _calc_q(self, T):
         raise NotImplementedError
 
     def _calc_qtrans2D(self, T):
         mtot = sum(self.mass) / kg
-        self.qtrans2D = 2 * np.pi * mtot * _k * T / _hplanck**2 / self.rho0
-        self.Etrans2D = kB * T * self.scale['Etrans2D']
-        self.Strans2D = kB * (2 + np.log(self.qtrans2D)) * self.scale['Strans2D']
+        self.q['trans2D'] = 2 * np.pi * mtot * _k * T / _hplanck**2 / self.rho0
+        self.E['trans2D'] = kB * T * self.scale['E']['trans2D']
+        self.S['trans2D'] = kB * (2 + np.log(self.q['trans2D'])) * self.scale['S']['trans2D']
 
     def _calc_qtrans(self, T):
         mtot = sum(self.mass) / kg
-        self.qtrans = 0.001 * (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.) \
+        self.q['trans'] = 0.001 * (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.) \
                 / (mol * self.rho0)
-        self.Etrans = 3. * kB * T / 2. * self.scale['Etrans']
-        self.Strans = kB * (5./2. + np.log(self.qtrans)) * self.scale['Strans']
+        self.E['trans'] = 3. * kB * T / 2. * self.scale['E']['trans']
+        self.S['trans'] = kB * (5./2. + np.log(self.q['trans'])) * self.scale['S']['trans']
 
     def _calc_qrot(self, T):
         com = self.atoms.get_center_of_mass()
@@ -141,27 +125,27 @@ class _Thermo(object):
             for atom in self.atoms:
                 I += atom.mass * np.linalg.norm(atom.position - com)**2
             I /= (kg * m**2)
-            self.qrot = 8 * np.pi**2 * I * _k * T / (_hplanck**2 * self.symm)
-            self.Erot = kB * T * self.scale['Erot']
-            self.Srot = kB * (1. + np.log(self.qrot)) * self.scale['Srot']
+            self.q['rot'] = 8 * np.pi**2 * I * _k * T / (_hplanck**2 * self.symm)
+            self.E['rot'] = kB * T * self.scale['E']['rot']
+            self.S['rot'] = kB * (1. + np.log(self.q['rot'])) * self.scale['S']['rot']
         else:
             I = self.atoms.get_moments_of_inertia() / (kg * m**2)
             thetarot = _hplanck**2 / (8 * np.pi**2 * I * _k)
-            self.qrot = np.sqrt(np.pi * T**3 / np.prod(thetarot)) / self.symm
-            self.Erot = 3. * kB * T / 2. * self.scale['Erot']
-            self.Srot = kB * (3./2. + np.log(self.qrot)) * self.scale['Srot']
+            self.q['rot'] = np.sqrt(np.pi * T**3 / np.prod(thetarot)) / self.symm
+            self.E['rot'] = 3. * kB * T / 2. * self.scale['E']['rot']
+            self.S['rot'] = kB * (3./2. + np.log(self.q['rot'])) * self.scale['S']['rot']
 
     def _calc_qvib(self, T, ncut=0):
         thetavib = self.freqs[ncut:] / kB
-        self.qvib = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
-        self.Evib = kB * sum(thetavib * (1./2. + 1./(np.exp(thetavib/T) - 1.))) \
-                * self.scale['Evib']
-        self.Svib = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) \
-                - np.log(1. - np.exp(-thetavib/T))) * self.scale['Svib']
+        self.q['vib'] = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
+        self.E['vib'] = kB * sum(thetavib * (1./2. + 1./(np.exp(thetavib/T) - 1.))) \
+                * self.scale['E']['vib']
+        self.S['vib'] = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) \
+                - np.log(1. - np.exp(-thetavib/T))) * self.scale['S']['vib']
 
     def _calc_qelec(self, T):
-        self.Eelec = self.potential_energy * self.scale['Eelec']
-        self.Selec = kB * np.log(2. * self.spin + 1.) * self.scale['Selec']
+        self.E['elec'] = self.potential_energy * self.scale['E']['elec']
+        self.S['elec'] = kB * np.log(2. * self.spin + 1.) * self.scale['S']['elec']
 
     def _read_hess_outcar(self):
         # This reads the hessian from the OUTCAR and diagonalizes it
@@ -333,10 +317,10 @@ class _Fluid(_Thermo):
         self._calc_qtrans(T)
         self._calc_qrot(T)
         self._calc_qvib(T, ncut=7 if self.ts else 6)
-        self.qtot = self.qtrans * self.qrot * self.qvib
-        self.Etot = self.Eelec + self.Etrans + self.Erot + self.Evib
-        self.Htot = self.Etot + kB * T
-        self.Stot = self.Selec + self.Strans + self.Srot + self.Svib
+        self.q['tot'] = self.q['trans'] * self.q['rot'] * self.q['vib']
+        self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + self.E['vib']
+        self.H = self.E['tot'] + kB * T
+        self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + self.S['vib']
 
 
 class Gas(_Fluid):
@@ -346,17 +330,18 @@ class Gas(_Fluid):
 class Liquid(_Fluid):
     def _calc_q(self, T):
         _Fluid._calc_q(self, T)
-        self.Stot += kB * np.log(kB * T * mol / (100 * Pascal * m**3)) - 8.7291e-4
+        self.S['tot'] += kB * np.log(kB * T * mol / (100 * Pascal * m**3)) - 8.7291e-4
 
 
 class Adsorbate(_Thermo):
     def __init__(self, outcar, spin=0., ts=False, coord=1, label=None, \
-            eref=None, metal=None, coverage_dependence=0.):
+            eref=None, metal=None, coverage_dependence=0., symbol=None):
         _Thermo.__init__(self, outcar, False, None, \
                 spin, ts, label, eref, metal)
         assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
         self.coord = coord
         self.coverage_dependence = coverage_dependence
+        self.symbol = symbol
 
     def get_reference_state(self):
         return 1.
@@ -364,10 +349,10 @@ class Adsorbate(_Thermo):
     def _calc_q(self, T):
         self._calc_qvib(T, ncut=1 if self.ts else 0)
         self._calc_qelec(T)
-        self.qtot = self.qvib
-        self.Etot = self.Eelec + self.Evib
-        self.Htot = self.Etot + kB * T
-        self.Stot = self.Selec + self.Svib
+        self.q['tot'] = self.q['vib']
+        self.E['tot'] = self.E['elec'] + self.E['vib']
+        self.H = self.E['tot'] + kB * T
+        self.S['tot'] = self.S['elec'] + self.S['vib']
 
     def copy(self):
         return self.__class__(self.outcar, self.spin, self.ts, self.coord, \
@@ -384,37 +369,18 @@ class _DummyThermo(_Thermo):
         self.label = label
         self.freqs = np.array(freqs) * _hplanck * 100 * J * _c
         self.rho0 = rhoref
-        self.qtot = None
-        self.qtrans = None
-        self.qrot = None
-        self.qvib = None
-        self.Stot = None
-        self.Selec = None
-        self.Strans = None
-        self.Srot = None
-        self.Svib = None
-        self.Eelec = self.potential_energy
-        self.Etrans = None
-        self.Erot = None
-        self.Evib = None
-        self.Htot = None
-        self.scale = {}
-        self.scale_params = ['Stot', 'Selec', 'Strans', 'Srot', 'Svib', \
-                'Etot', 'Eelec', 'Etrans', 'Erot', 'Evib', 'Htot']
-        for param in self.scale_params:
-            self.scale[param] = 1.0
         self.scale_old = self.scale.copy()
         self.coverage_dependence = 0
 
     def _calc_qvib(self, T, ncut=0):
-        self.Evib = sum(self.freqs[ncut:])/2. * self.scale['Evib']
+        self.E['vib'] = sum(self.freqs[ncut:])/2. * self.scale['E']['vib']
         thetavib = self.freqs[ncut:] / kB
         x = self.freqs[ncut:] / (kB * T)
-        self.Svib = kB * np.sum(x / (np.exp(x) - 1) - np.log(1-np.exp(-x))) * self.scale['Svib']
+        self.S['vib'] = kB * np.sum(x / (np.exp(x) - 1) - np.log(1-np.exp(-x))) * self.scale['S']['vib']
 
-#        self.qvib = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
-#        self.Svib = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) \
-#                - np.log(1. - np.exp(-thetavib/T))) * self.scale['Svib']
+#        self.q['vib'] = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
+#        self.S['vib'] = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) \
+#                - np.log(1. - np.exp(-thetavib/T))) * self.scale['S']['vib']
 
     def get_reference_state(self):
         return self.rho0
@@ -450,22 +416,22 @@ class DummyFluid(_DummyThermo):
         if len(self.atoms) > 0:
             self._calc_qtrans(T)
         else:
-            self.Strans = 0
-            self.Etrans = 0
+            self.S['trans'] = 0
+            self.E['trans'] = 0
         if self.monatomic:
-            self.Erot = 0
-            self.Evib = 0
-            self.Srot = 0
-            self.Svib = 0
+            self.E['rot'] = 0
+            self.E['vib'] = 0
+            self.S['rot'] = 0
+            self.S['vib'] = 0
         else:
             self._calc_qrot(T)
             self._calc_qvib(T)
-        self.Etot = self.Eelec + self.Etrans + self.Erot + self.Evib
+        self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + self.E['vib']
         if self.H_in is not None:
-            self.Htot = self.H_in
+            self.H = self.H_in
         else:
-            self.Htot = self.Etot + kB * T
-        self.Stot = self.Selec + self.Strans + self.Srot + self.Svib
+            self.H = self.E['tot'] + kB * T
+        self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + self.S['vib']
 
 
 class DummyAdsorbate(_DummyThermo):
@@ -493,27 +459,27 @@ class DummyAdsorbate(_DummyThermo):
         if self.gas is not None:
             self.gas._calc_q(T)
             if self.ZPE is not None:
-                self.gas.Evib = self.Evib - self.ZPE
+                self.gas.E['vib'] = self.E['vib'] - self.ZPE
             if self.gas.Stot_in is not None:
                 self.Stot_gas = self.gas.Stot_in
             else:
-                self.Stot_gas = (self.gas.Strans + self.gas.Srot 
-                        + self.gas.Svib + self.gas.Selec)
-        self.Etot = self.Eelec + self.Evib
-        self.Htot = self.Etot + kB * T
+                self.Stot_gas = (self.gas.S['trans'] + self.gas.S['rot']
+                        + self.gas.S['vib'] + self.gas.S['elec'])
+        self.E['tot'] = self.E['elec'] + self.E['vib']
+        self.H = self.E['tot'] + kB * T
         if self.gas is not None:
-            self.Htot -= self.gas.Evib
-        self.Stot = self.Selec + self.Svib
+            self.H -= self.gas.Evib
+        self.S['tot'] = self.S['elec'] + self.S['vib']
 
     def get_S_gas(self, T):
         assert self.gas is not None
         self.update(T)
-        return self.Floc * (self.Stot_gas - self.gas.Strans)
+        return self.Floc * (self.Stot_gas - self.gas.S['trans'])
     
     def get_dZPE(self, T):
         self.gas.update(T)
         self.update(T)
-        return self.Evib - self.gas.Evib
+        return self.E['vib'] - self.gas.E['vib']
 
     def copy(self):
         return self.__class__(self.label, self.spin, self.ts, self.coord, \

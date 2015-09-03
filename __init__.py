@@ -1,4 +1,4 @@
-from mkm.reactants import Liquid, Gas, Adsorbate
-from mkm.model import Reaction, Model
-from mkm.eref import EnergyReference
-from mkm.analysis import ModelAnalysis
+from micki.reactants import Liquid, Gas, Adsorbate
+from micki.model import Reaction, Model
+from micki.eref import EnergyReference
+from micki.analysis import ModelAnalysis

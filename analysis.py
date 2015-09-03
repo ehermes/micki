@@ -2,8 +2,8 @@
 
 import numpy as np
 from ase.units import kB
-from mkm.reactants import Adsorbate, _Fluid
-from mkm.model import Model
+from micki.reactants import Adsorbate, _Fluid
+from micki.model import Model
 
 class ModelAnalysis(object):
     def __init__(self, model, product_reaction, Uequil, tol=1e-3, dt=3600):
@@ -30,9 +30,9 @@ class ModelAnalysis(object):
         test_reaction.set_scale('kfor', 1.0 - scale)
         test_reaction.set_scale('krev', 1.0 - scale)
         klow = test_reaction.get_kfor(self.model.T, self.model.N0)
-        self.model.set_initial_conditions(self.Uequil)
+        model = self.model.copy()
         try:
-            U1, dU1, r1 = self.model.solve(self.dt, 4)
+            U1, dU1, r1 = model.solve(self.dt, 4)
         except:
             test_reaction.set_scale('kfor', 1.0)
             test_reaction.set_scale('krev', 1.0)
@@ -43,9 +43,9 @@ class ModelAnalysis(object):
         test_reaction.set_scale('kfor', 1.0 + scale)
         test_reaction.set_scale('krev', 1.0 + scale)
         khigh = test_reaction.get_kfor(self.model.T, self.model.N0)
-        self.model.set_initial_conditions(self.Uequil)
+        model = self.model.copy()
         try:
-            U2, dU2, r2 = self.model.solve(self.dt, 4)
+            U2, dU2, r2 = model.solve(self.dt, 4)
         except:
             test_reaction.set_scale('kfor', 1.0)
             test_reaction.set_scale('krev', 1.0)
@@ -65,33 +65,33 @@ class ModelAnalysis(object):
         rmid = self.r[-1][self.product_reaction]
         T = self.model.T
 
-        test_species.set_scale('Stot', 1.0 - scale)
-        test_species.set_scale('Htot', 1.0 - scale)
-        self.model.set_initial_conditions(self.Uequil)
+        test_species.scale['S']['tot'] = 1.0 - scale
+        test_species.scale['H']['tot'] = 1.0 - scale
+        model = self.model.copy()
         try:
-            U1, dU1, r1 = self.model.solve(self.dt, 4)
+            U1, dU1, r1 = model.solve(self.dt, 4)
         except:
-            test_species.set_scale('Stot', 1.0)
-            test_species.set_Scale('Htot', 1.0)
+            test_species.scale['S']['tot'] = 1.0
+            test_species.scale['H']['tot'] = 1.0
             raise
         glow = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U1, dU1, r1)
         rlow = r1[-1][self.product_reaction]
 
-        test_species.set_scale('Stot', 1.0 + scale)
-        test_species.set_scale('Htot', 1.0 + scale)
-        self.model.set_initial_conditions(self.Uequil)
+        test_species.scale['S']['tot'] = 1.0 + scale
+        test_species.scale['H']['tot'] = 1.0 + scale
+        model = self.model.copy()
         try:
-            U2, dU2, r2 = self.model.solve(self.dt, 4)
+            U2, dU2, r2 = model.solve(self.dt, 4)
         except:
-            test_species.set_scale('Stot', 1.0)
-            test_species.set_scale('Htot', 1.0)
+            test_species.scale['S']['tot'] = 1.0
+            test_species.scale['H']['tot'] = 1.0
         ghigh = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U2, dU2, r2)
         rhigh = r2[-1][self.product_reaction]
 
-        test_species.set_scale('Stot', 1.0)
-        test_species.set_scale('Htot', 1.0)
+        test_species.scale['S']['tot'] = 1.0
+        test_species.scale['H']['tot'] = 1.0
 
         return (rhigh - rlow) * kB * T / (rmid * (glow - ghigh))
 
@@ -99,28 +99,19 @@ class ModelAnalysis(object):
         rmid = self.r[-1][self.product_reaction]
         T = self.model.T
 
-        self.model.set_temperature(T - dT)
-        try:
-            U1, dU1, r1 = self.model.solve(self.dt, 4)
-        except:
-            self.model.set_temperature(T)
-            raise
+        model = self.model.copy()
+        model.set_temperature(T - dT)
+        U1, dU1, r1 = model.solve(self.dt, 4)
         self.check_converged(U1, dU1, r1)
 
         rlow = r1[-1][self.product_reaction]
 
-        self.model.set_temperature(T + dT)
-        try:
-            U2, dU2, r2 = self.model.solve(self.dt, 4)
-        except:
-            self.model.set_temperature(T)
-            raise
+        model.set_temperature(T + dT)
+        U2, dU2, r2 = model.solve(self.dt, 4)
         self.check_converged(U2, dU2, r2)
 
         rhigh = r2[-1][self.product_reaction]
 
-        self.model.set_temperature(T)
-        
         return kB * T**2 * (rhigh - rlow) / (rmid * 2 * dT)
 
     def rate_order(self, test_species, drho=0.001):
@@ -133,23 +124,16 @@ class ModelAnalysis(object):
         U0 = self.Uequil.copy()
         rholow = rhomid * (1.0 - drho)
         U0[test_species] = rholow
-        self.model.set_initial_conditions(U0)
-        try:
-            U1, dU1, r1 = self.model.solve(self.dt, 4)
-        except:
-            self.model.set_initial_conditions(self.Uequil)
-            raise
+        model = self.model.copy()
+        model.set_initial_conditions(U0)
+        U1, dU1, r1 = model.solve(self.dt, 4)
         self.check_converged(U1, dU1, r1)
         rlow = r1[-1][self.product_reaction]
 
         rhohigh = rhomid * (1.0 + drho)
         U0[test_species] = rhohigh
-        self.model.set_initial_conditions(U0)
-        try:
-            U2, dU2, r2 = self.model.solve(self.dt, 4)
-        except:
-            self.model.set_initial_conditions(self.Uequil)
-            raise
+        model.set_initial_conditions(U0)
+        U2, dU2, r2 = model.solve(self.dt, 4)
         self.check_converged(U2, dU2, r2)
         rhigh = r2[-1][self.product_reaction]
 

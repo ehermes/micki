@@ -7,6 +7,5 @@ name is subject to change (and will be changed, MKM is a bad name).
 ### DEPENDENCIES:
  * ase
  * numpy
- * scipy
  * sympy
- * odespy (https://github.com/hplgit/odespy)
+ * assimulo

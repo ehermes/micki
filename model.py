@@ -1,21 +1,23 @@
 """Microkinetic modeling objects"""
 
-import numpy as np
+import os
 
-from scipy.integrate import odeint
+import numpy as np
 
 from ase.units import kB, _hplanck, kg, _k, _Nav, mol
 
 import sympy as sym
 
-from mkm.reactants import _Thermo, _Fluid, _Reactants, Gas, Liquid, Adsorbate
-from mkm.reactants import DummyFluid, DummyAdsorbate
+from micki.reactants import _Thermo, _Fluid, _Reactants, Gas, Liquid, Adsorbate
+from micki.reactants import DummyFluid, DummyAdsorbate
 
 from assimulo.problem import Implicit_Problem
 
 from assimulo.solvers import IDA
 
 from copy import copy
+
+import warnings
 
 
 class Reaction(object):
@@ -112,11 +114,23 @@ class Reaction(object):
         self.dH *= self.scale['dH']
         self.dS = self.products.get_S(T) - self.reactants.get_S(T)
         self.dS *= self.scale['dS']
+        self.dG = self.dH - self.T * self.dS
         if self.ts is not None:
             self.dH_act = self.ts.get_H(T) - self.reactants.get_H(T)
             self.dH_act *= self.scale['dH_act']
             self.dS_act = self.ts.get_S(T) - self.reactants.get_S(T)
             self.dS_act *= self.scale['dS_act']
+            self.dG_act = self.dH_act - self.T * self.dS_act
+            if self.dG_act < 0.:
+                warnings.warn('Negative activation energy found for {}. \
+                        Rounding to 0.'.format(self), RuntimeWarning, \
+                        stacklevel=2)
+                self.dG_act = 0.
+            if self.dG_act - self.dG < 0.:
+                warnings.warn('Negative activation energy found for {}. \
+                        Rounding to {}'.format(self, self.dG), RuntimeWarning, \
+                        stacklevel=2)
+                self.dG_act = self.dG
         self._calc_keq(T)
         self._calc_kfor(T, N0)
         self._calc_krev(T, N0)
@@ -150,16 +164,15 @@ class Reaction(object):
         return self.krev
 
     def _calc_keq(self, T):
-        self.keq = sym.exp(-self.dH / (kB * T) + self.dS / kB) \
+        self.keq = sym.exp(-self.dG / (kB * T)) \
                 * self.products.get_reference_state() \
                 / self.reactants.get_reference_state() \
                 * self.scale['kfor'] / self.scale['krev']
 
     def _calc_kfor(self, T, N0):
-        if self.ts is None:
-            barr = 1
-        else:
-            barr = np.exp(-self.dH_act / (kB * T) + self.dS_act / kB) \
+        barr = 1
+        if self.ts is not None:
+            barr *= sym.exp(-self.dG_act / (kB * T)) \
                     * self.ts.get_reference_state() \
                     / self.reactants.get_reference_state()
         if self.method == 'EQUIL':
@@ -234,7 +247,7 @@ class DummyReaction(Reaction):
                 for reactant in self.reactants:
                     reactant.update(T)
                     dS_act -= reactant.Svib
-                A = (_k * T / _hplanck) * np.exp(dS_act / kB)
+                A = (_k * T / _hplanck) * sym.exp(dS_act / kB)
 
             if self.Ei is not None:
                 Ei = self.Ei
@@ -246,7 +259,7 @@ class DummyReaction(Reaction):
                 for reactant in self.reactants:
                     reactant.update(T)
                     Ei -= reactant.Eelec + reactant.Evib
-            self.kfor = A * np.exp(-Ei / (kB * T))
+            self.kfor = A * sym.exp(-Ei / (kB * T))
 
     def _calc_krev(self, T, N0):
         self.krev = self.kfor / self.keq        
@@ -254,8 +267,7 @@ class DummyReaction(Reaction):
 
 class Model(object):
     def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
-            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None,
-            coverage_symbols=None):
+            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -283,7 +295,6 @@ class Model(object):
         self.nz = nz
         self.shape = shape
         self.D = D
-        self.coverage_symbols = coverage_symbols
 
         # Do we need to consider diffusion?
         self.diffusion = False
@@ -459,11 +470,15 @@ class Model(object):
                     self.symbols.append(self.symbols_all[i])
                 i += 1
         self.nsymbols = len(self.symbols)
-        self.trans_cov_symbols = None
-        if self.coverage_symbols is not None:
-            self.trans_cov_symbols = {}
-            for species, symbol in self.coverage_symbols.iteritems():
-                self.trans_cov_symbols[symbol] = self.symbols_dict[species]
+        self.trans_cov_symbols = {}
+        for species in self.species:
+            if isinstance(species, Adsorbate) and species.symbol is not None:
+                self.trans_cov_symbols[species.symbol] = self.symbols_dict[species]
+#        self.trans_cov_symbols = None
+#        if self.coverage_symbols is not None:
+#            self.trans_cov_symbols = {}
+#            for species, symbol in self.coverage_symbols.iteritems():
+#                self.trans_cov_symbols[symbol] = self.symbols_dict[species]
             
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
         algvar = np.zeros(self.nsymbols, dtype=bool)
@@ -547,11 +562,18 @@ class Model(object):
                     break
         self.last_x = np.zeros_like(U0, dtype=float)
         self.update(np.array(U0))
-        self.model = Implicit_Problem(res=self.res, y0=U0, yd0=self.f(U0), t0=0.)
-        self.model.jac = self.jac
-#        self.model.atol = 1e-16
-#        self.model.rtol = 1e-12
-        self.model.algvar = algvar
+        self.problem = Implicit_Problem(res=self.res, y0=U0, yd0=self.f(U0), t0=0.)
+        self.problem.jac = self.jac
+        self.sim = IDA(self.problem)
+        self.sim.verbosity = 50
+        self.sim.algvar = algvar
+        self.sim.atol = 1e-10
+        self.sim.rtol = 1e-8
+        try:
+            nthreads = os.environ['OMP_NUM_THREADS']
+        except KeyError:
+            nthreads = 1
+        self.sim.num_threads = nthreads
 #        self.model.suppress_alg = True
 
     def setup_execs(self):
@@ -601,8 +623,6 @@ class Model(object):
         return p + self.M
 
     def solve(self, t, ncp):
-        self.sim = IDA(self.model)
-        self.sim.verbosity = 50
         self.t, self.U1, self.dU1 = self.sim.simulate(t, ncp)
         return self._results()
 
@@ -638,5 +658,4 @@ class Model(object):
     def copy(self):
         return Model(self.reactions, self.vacancy, self.T, self.V, self.nsites, \
                 self.N0, self.coverage, self.z, self.nz, self.shape, \
-                self.steady_state, self.fixed, self.D, self.solvent, self.U0, \
-                self.coverage_symbols)
+                self.steady_state, self.fixed, self.D, self.solvent, self.U0)
