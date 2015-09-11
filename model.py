@@ -121,12 +121,31 @@ class Reaction(object):
             self.dS_act = self.ts.get_S(T) - self.reactants.get_S(T)
             self.dS_act *= self.scale['dS_act']
             self.dG_act = self.dH_act - self.T * self.dS_act
-            if self.dG_act < 0.:
+
+            # If there is a coverage dependence, assume everything has coverage 0
+            dG_act = self.dG_act
+            if isinstance(dG_act, sym.Basic):
+                subs = {}
+                for atom in dG_act.atoms():
+                    if isinstance(atom, sym.Symbol):
+                        subs[atom] = 0.
+                dG_act = dG_act.subs(subs)
+
+            if dG_act < 0.:
                 warnings.warn('Negative activation energy found for {}. \
                         Rounding to 0.'.format(self), RuntimeWarning, \
                         stacklevel=2)
                 self.dG_act = 0.
-            if self.dG_act - self.dG < 0.:
+
+            dG_rev = self.dG_act - self.dG
+            if isinstance(dG_rev, sym.Basic):
+                subs = {}
+                for atom in dG_rev.atoms():
+                    if isinstance(atom, sym.Symbol):
+                        subs[atom] = 0.
+                dG_rev = dG_rev.subs(subs)
+
+            if dG_rev < 0.:
                 warnings.warn('Negative activation energy found for {}. \
                         Rounding to {}'.format(self, self.dG), RuntimeWarning, \
                         stacklevel=2)
