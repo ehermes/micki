@@ -66,32 +66,32 @@ class ModelAnalysis(object):
         T = self.model.T
 
         test_species.scale['S']['tot'] = 1.0 - scale
-        test_species.scale['H']['tot'] = 1.0 - scale
+        test_species.scale['H'] = 1.0 - scale
         model = self.model.copy()
         try:
             U1, dU1, r1 = model.solve(self.dt, 4)
         except:
             test_species.scale['S']['tot'] = 1.0
-            test_species.scale['H']['tot'] = 1.0
+            test_species.scale['H'] = 1.0
             raise
         glow = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U1, dU1, r1)
         rlow = r1[-1][self.product_reaction]
 
         test_species.scale['S']['tot'] = 1.0 + scale
-        test_species.scale['H']['tot'] = 1.0 + scale
+        test_species.scale['H'] = 1.0 + scale
         model = self.model.copy()
         try:
             U2, dU2, r2 = model.solve(self.dt, 4)
         except:
             test_species.scale['S']['tot'] = 1.0
-            test_species.scale['H']['tot'] = 1.0
+            test_species.scale['H'] = 1.0
         ghigh = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U2, dU2, r2)
         rhigh = r2[-1][self.product_reaction]
 
         test_species.scale['S']['tot'] = 1.0
-        test_species.scale['H']['tot'] = 1.0
+        test_species.scale['H'] = 1.0
 
         return (rhigh - rlow) * kB * T / (rmid * (glow - ghigh))
 
