@@ -143,4 +143,4 @@ class ModelAnalysis(object):
         for val in vals:
             for i, key in enumerate(val[0]):
                 if np.abs(val[-1][key] - val[-2][key]) > self.tol:
-                    raise ValueError, "Calculation not converged! Increase dt or use better initial guess."
+                    raise ValueError("Calculation not converged! Increase dt or use better initial guess.")

@@ -178,7 +178,7 @@ class _Thermo(object):
                             elif direction[-1] == 'Z':
                                 cart[i] = 2
                             else:
-                                raise ValueError, "Error reading Hessian!"
+                                raise ValueError("Error reading Hessian!")
                         hessblock = 3
                         j = 0
 
@@ -290,7 +290,7 @@ class _Thermo(object):
 
     def __mul__(self, factor):
         assert isinstance(factor, int)
-        return _Reactants([self for i in xrange(factor)])
+        return _Reactants([self for i in range(factor)])
 
     def __rmul__(self, factor):
         return self.__mul__(factor)

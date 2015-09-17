@@ -33,9 +33,9 @@ class EnergyReference(dict):
 
         size = len(elements)
         if len(energies) < size:
-            raise ValueError, "System is underdetermined!"
+            raise ValueError("System is underdetermined!")
         elif len(energies) > size:
-            raise ValueError, "System is overdetermined!"
+            raise ValueError("System is overdetermined!")
 
         coeff = np.zeros((size, size), dtype=float)
 

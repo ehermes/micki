@@ -1,5 +1,7 @@
 """Microkinetic modeling objects"""
 
+from __future__ import print_function
+
 import os
 
 import numpy as np
@@ -78,7 +80,7 @@ class Reaction(object):
         if isinstance(self.method, str):
             self.method = self.method.upper()
         if self.adsorption and self.method not in ['EQUIL', 'CT']:
-            raise ValueError, "Method {} unsupported for adsorption reactions!".format(self.method)
+            raise ValueError("Method {} unsupported for adsorption reactions!".format(self.method))
         self.S0 = S0
         self.keq = None
         self.kfor = None
@@ -95,14 +97,14 @@ class Reaction(object):
         try:
             return self.scale[param]
         except KeyError:
-            print "{} is not a valid scaling parameter name!".format(param)
+            print("{} is not a valid scaling parameter name!".format(param))
             return None
 
     def set_scale(self, param, value):
         try:
             self.scale[param] = value
         except KeyError:
-            print "{} is not a valid scaling parameter name!".format(param)
+            print("{} is not a valid scaling parameter name!".format(param))
 
     def update(self, T=None, N0=None):
         if not self.is_update_needed(T, N0):
@@ -208,7 +210,7 @@ class Reaction(object):
             #Transition State Theory
             self.kfor = (_k * T / _hplanck) * barr
         else:
-            raise ValueError, "Method {} is not recognized!".format(self.method)
+            raise ValueError("Method {} is not recognized!".format(self.method))
         self.kfor *= self.scale['kfor']
 
     def _calc_krev(self, T, N0):
@@ -238,14 +240,14 @@ class DummyReaction(Reaction):
             elif isinstance(species, DummyAdsorbate):
                 self.dS -= species.get_S_gas(T)
             else:
-                raise ValueError, "Must pass dummy object!"
+                raise ValueError("Must pass dummy object!")
         for species in self.products:
             if isinstance(species, DummyFluid):
                 self.dS += species.Stot
             elif isinstance(species, DummyAdsorbate):
                 self.dS += species.get_S_gas(T)
             else:
-                raise ValueError, "Must pass dummy object!"
+                raise ValueError("Must pass dummy object!")
         self.keq = sym.exp(-self.dH / (kB * T) + self.dS / kB) \
                 * self.products.get_reference_state() \
                 / self.reactants.get_reference_state() \
@@ -375,7 +377,7 @@ class Model(object):
             self.dz = np.exp(7. * np.arange(self.nz - 1, dtype=float) / (self.nz - 2))
         self.dz *= self.z / self.dz.sum()
         self.zi = np.zeros(self.nz, dtype=float)
-        for i in xrange(self.nz):
+        for i in range(self.nz):
             # We don't calculate the width of the last grid point here,
             # that is done later to ensure that the sum over all grid points
             # gives the total system volume.
@@ -417,7 +419,7 @@ class Model(object):
         self.update(U)
         return self.rates_last
 #        r = np.zeros_like(self.rates_exec, dtype=float)
-#        for i in xrange(len(self.reactions)):
+#        for i in range(len(self.reactions)):
 #            r[i] = self.rates_exec[i](*U)
 #        return r
 
@@ -428,7 +430,7 @@ class Model(object):
             if type(species) is tuple:
                 species = species[0]
             if species not in self.species:
-                raise ValueError, "Unknown species!"
+                raise ValueError("Unknown species!")
             if (isinstance(species, (Adsorbate, DummyAdsorbate)) 
                     and species is not self.vacancy):
                 occsites += self.U0[species] * species.coord
@@ -448,7 +450,7 @@ class Model(object):
             if isinstance(species, Liquid):
                 U0i = self.U0[species]
                 if species is not self.solvent:
-                    for i in xrange(self.nz):
+                    for i in range(self.nz):
                         if (species, i) not in self.U0:
                             self.U0[(species, i)] = U0i
                         else:
@@ -473,7 +475,7 @@ class Model(object):
             if isinstance(species, Liquid):
                 self.symbols_dict[species] = self.symbols_all[i]
                 if species is not self.solvent:
-                    for j in xrange(self.nz):
+                    for j in range(self.nz):
                         self.symbols_dict[(species, j)] = self.symbols_all[i]
                         if not (j == self.nz - 1 and species in self.fixed):
                             self.symbols.append(self.symbols_all[i])
@@ -521,7 +523,7 @@ class Model(object):
         for species in self.species:
             f = 0
             if isinstance(species, Liquid) and species is not self.solvent:
-                for i in xrange(self.nz):
+                for i in range(self.nz):
                     f = 0
                     diff = self.D[species] / self.zi[i]
                     if i > 0:
@@ -575,7 +577,7 @@ class Model(object):
         self.setup_execs()
         U0 = []
         for symbol in self.symbols:
-            for species, isymbol in self.symbols_dict.iteritems():
+            for species, isymbol in self.symbols_dict.items():
                 if symbol == isymbol:
                     U0.append(self.U0[species])
                     break
@@ -660,7 +662,7 @@ class Model(object):
                     dUi[species] = 0.
             j = 0
             for j, symbol in enumerate(self.symbols):
-                for species, isymbol in self.symbols_dict.iteritems():
+                for species, isymbol in self.symbols_dict.items():
                     if symbol == isymbol:
                         Ui[species] = self.U1[i][j]
                         dUi[species] = dU1[j]
