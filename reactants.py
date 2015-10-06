@@ -7,6 +7,8 @@ import numpy as np
 
 from ase.io import read
 
+from ase.db.row import AtomsRow
+
 from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal, _Nav
 
 from micki.masses import masses
@@ -20,7 +22,7 @@ class _Thermo(object):
     modeutions to the partition function from translation, rotation,
     and vibration."""
 
-    def __init__(self, outcar, linear=False, symm=1, spin=0., ts=False, \
+    def __init__(self, dft, linear=False, symm=1, spin=0., ts=False, \
             label=None, eref=None, metal=None):
         self.T = None
 
@@ -35,16 +37,32 @@ class _Thermo(object):
                       'S': dict.fromkeys(self.mode, 1.0),
                       'H': 1.0}
 
-        self.outcar = outcar
+        self.dft = dft
+
+        if isinstance(self.dft, AtomsRow):
+            db = True
+            self.atoms = self.dft.toatoms()
+        else:
+            db = False
+            self.atoms = read(self.dft, index=0)
+
+
         self.metal = metal
-        self.atoms = read(self.outcar, index=0)
         self.mass = [masses[atom.symbol] for atom in self.atoms]
         self.atoms.set_masses(self.mass)
         self.eref = eref
-        if 'OUTCAR' in self.outcar:
-            self._read_hess_outcar()
-        elif self.outcar.endswith('.xml'):
-            self._read_hess_xml()
+
+        if db:
+            try:
+                self.freqs = np.array(self.dft.data['freqs'])
+            except KeyError:
+                raise ValueError("ase.db objects must have vibrational frequencies stored as data with key 'freqs'!")
+        else:
+            if 'OUTCAR' in self.dft:
+                self._read_hess_outcar()
+            elif self.dft.endswith('.xml'):
+                self._read_hess_xml()
+
         self.potential_energy = self.atoms.get_potential_energy()
         self.linear = linear
         self.symm = symm
@@ -155,7 +173,7 @@ class _Thermo(object):
         # atom masses for all calculations. Also, allows for the possibility
         # of doing partial hessian diagonalization should we want to do that.
         hessblock = 0
-        with open(self.outcar, 'r') as f:
+        with open(self.dft, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line != '':
@@ -200,7 +218,7 @@ class _Thermo(object):
     def _read_hess_xml(self):
         import xml.etree.ElementTree as ET
 
-        tree = ET.parse(self.outcar)
+        tree = ET.parse(self.dft)
         root = tree.getroot()
 
         vasp_mass = {}
@@ -298,9 +316,9 @@ class _Thermo(object):
 
 class _Fluid(_Thermo):
     """Master object for both liquids and gasses"""
-    def __init__(self, outcar, linear=False, symm=1, spin=0., \
+    def __init__(self, dft, linear=False, symm=1, spin=0., \
             label=None, eref=None, rhoref=1.):
-        _Thermo.__init__(self, outcar, linear, symm, \
+        _Thermo.__init__(self, dft, linear, symm, \
                 spin, False, label, eref, None)
         self.rho0 = rhoref
         assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
@@ -309,7 +327,7 @@ class _Fluid(_Thermo):
         return self.rho0
 
     def copy(self):
-        return self.__class__(self.outcar, self.linear, self.symm, self.spin, \
+        return self.__class__(self.dft, self.linear, self.symm, self.spin, \
                 self.label, self.eref)
 
     def _calc_q(self, T):
@@ -334,9 +352,9 @@ class Liquid(_Fluid):
 
 
 class Adsorbate(_Thermo):
-    def __init__(self, outcar, spin=0., ts=False, coord=1, label=None, \
+    def __init__(self, dft, spin=0., ts=False, coord=1, label=None, \
             eref=None, metal=None, coverage_dependence=0., symbol=None):
-        _Thermo.__init__(self, outcar, False, None, \
+        _Thermo.__init__(self, dft, False, None, \
                 spin, ts, label, eref, metal)
         assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
         self.coord = coord
@@ -355,7 +373,7 @@ class Adsorbate(_Thermo):
         self.S['tot'] = self.S['elec'] + self.S['vib']
 
     def copy(self):
-        return self.__class__(self.outcar, self.spin, self.ts, self.coord, \
+        return self.__class__(self.dft, self.spin, self.ts, self.coord, \
                 self.label, self.eref, self.metal)
 
 class _DummyThermo(_Thermo):

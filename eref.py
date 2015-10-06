@@ -4,6 +4,7 @@ import numpy as np
 
 from ase.io import read
 from ase.data import chemical_symbols
+from ase.db.row import AtomsRow
 
 
 class EnergyReference(dict):
@@ -26,7 +27,10 @@ class EnergyReference(dict):
         self.initialized = False
 
         for sp in species:
-            conf = read(sp, index=index)
+            if isinstance(sp, AtomsRow):
+                conf = sp.toatoms()
+            else:
+                conf = read(sp, index=index)
             symbols.append(conf.get_chemical_symbols())
             elements = elements.union(symbols[-1])
             energies.append(conf.get_potential_energy())
