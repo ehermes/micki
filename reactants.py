@@ -320,8 +320,9 @@ class _Fluid(_Thermo):
             label=None, eref=None, rhoref=1.):
         _Thermo.__init__(self, dft, linear, symm, \
                 spin, False, label, eref, None)
+        self.ncut = 6 - self.linear + self.ts
         self.rho0 = rhoref
-        assert np.all(self.freqs[6:] > 0), "Imaginary frequencies found!"
+        assert np.all(self.freqs[self.ncut:] > 0), "Extra imaginary frequencies found!"
 
     def get_reference_state(self):
         return self.rho0
@@ -334,10 +335,10 @@ class _Fluid(_Thermo):
         self._calc_qelec(T)
         self._calc_qtrans(T)
         self._calc_qrot(T)
-        self._calc_qvib(T, ncut=7 if self.ts else 6)
+        self._calc_qvib(T, ncut=self.ncut)
         self.q['tot'] = self.q['trans'] * self.q['rot'] * self.q['vib']
         self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + self.E['vib']
-        self.H = self.E['tot'] + kB * T
+        self.H = self.E['tot'] #+ kB * T
         self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + self.S['vib']
 
 
@@ -369,7 +370,7 @@ class Adsorbate(_Thermo):
         self._calc_qelec(T)
         self.q['tot'] = self.q['vib']
         self.E['tot'] = self.E['elec'] + self.E['vib']
-        self.H = self.E['tot'] + kB * T
+        self.H = self.E['tot'] #+ kB * T
         self.S['tot'] = self.S['elec'] + self.S['vib']
 
     def copy(self):
