@@ -109,6 +109,10 @@ class _Thermo(object):
         self.update(T)
         return self.S['tot'] * self.scale['S']['tot']
 
+    def get_G(self, T=None):
+        self.update(T)
+        return self.H * self.scale['H'] - T * self.S['tot'] * self.scale['S']['tot']
+
     def get_E(self, T=None):
         self.update(T)
         return self.E['tot'] * self.scale['E']['tot']
@@ -561,6 +565,12 @@ class _Reactants(object):
         for species in self.species:
             S += species.get_S(T)
         return S
+
+    def get_G(self, T=None):
+        G = 0.
+        for species in self.species:
+            G += species.get_G(T)
+        return G
 
     def get_E(self, T=None):
         E = 0.

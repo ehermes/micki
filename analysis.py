@@ -18,6 +18,8 @@ class ModelAnalysis(object):
         self.model.set_initial_conditions(self.Uequil)
 
         self.U, self.dU, self.r = self.model.solve(self.dt, 4)
+        if model.fortran:
+            model.finalize()
         
         self.check_converged(self.U, self.dU, self.r)
 
@@ -37,6 +39,8 @@ class ModelAnalysis(object):
             test_reaction.set_scale('kfor', 1.0)
             test_reaction.set_scale('krev', 1.0)
             raise
+        if model.fortran:
+            model.finalize()
         self.check_converged(U1, dU1, r1)
         rlow = r1[-1][self.product_reaction]
 
@@ -50,6 +54,8 @@ class ModelAnalysis(object):
             test_reaction.set_scale('kfor', 1.0)
             test_reaction.set_scale('krev', 1.0)
             raise
+        if model.fortran:
+            model.finalize()
         self.check_converged(U2, dU2, r2)
         rhigh = r2[-1][self.product_reaction]
         test_reaction.set_scale('kfor', 1.0)
@@ -74,6 +80,8 @@ class ModelAnalysis(object):
             test_species.scale['S']['tot'] = 1.0
             test_species.scale['H'] = 1.0
             raise
+        if model.fortran:
+            model.finalize()
         glow = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U1, dU1, r1)
         rlow = r1[-1][self.product_reaction]
@@ -86,6 +94,9 @@ class ModelAnalysis(object):
         except:
             test_species.scale['S']['tot'] = 1.0
             test_species.scale['H'] = 1.0
+            raise
+        if model.fortran:
+            model.finalize()
         ghigh = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U2, dU2, r2)
         rhigh = r2[-1][self.product_reaction]
@@ -102,12 +113,17 @@ class ModelAnalysis(object):
         model = self.model.copy()
         model.set_temperature(T - dT)
         U1, dU1, r1 = model.solve(self.dt, 4)
+        if model.fortran:
+            model.finalize()
         self.check_converged(U1, dU1, r1)
 
         rlow = r1[-1][self.product_reaction]
-
+        
+        model = self.model.copy()
         model.set_temperature(T + dT)
         U2, dU2, r2 = model.solve(self.dt, 4)
+        if model.fortran:
+            model.finalize()
         self.check_converged(U2, dU2, r2)
 
         rhigh = r2[-1][self.product_reaction]
@@ -127,6 +143,8 @@ class ModelAnalysis(object):
         model = self.model.copy()
         model.set_initial_conditions(U0)
         U1, dU1, r1 = model.solve(self.dt, 4)
+        if model.fortran:
+            model.finalize()
         self.check_converged(U1, dU1, r1)
         rlow = r1[-1][self.product_reaction]
 
@@ -134,6 +152,8 @@ class ModelAnalysis(object):
         U0[test_species] = rhohigh
         model.set_initial_conditions(U0)
         U2, dU2, r2 = model.solve(self.dt, 4)
+        if model.fortran:
+            model.finalize()
         self.check_converged(U2, dU2, r2)
         rhigh = r2[-1][self.product_reaction]
 
