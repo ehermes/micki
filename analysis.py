@@ -1,6 +1,7 @@
 """Module for doing sensitivity analysis of microkinetic model"""
 
 import numpy as np
+import sympy as sym
 from ase.units import kB
 from micki.reactants import Adsorbate, _Fluid
 from micki.model import Model
@@ -17,24 +18,33 @@ class ModelAnalysis(object):
 
         self.model.set_initial_conditions(self.Uequil)
 
-        self.U, self.dU, self.r = self.model.solve(self.dt, 4)
+        self.U, self.dU, self.r = self.model.solve(self.dt, 100)
         if model.fortran:
             model.finalize()
         
         self.check_converged(self.U, self.dU, self.r)
+        self.species_symbols = []
+        for species in self.model.species:
+            if isinstance(species, Adsorbate) and species.symbol is not None:
+                self.species_symbols.append(species)
 
     def campbell_rate_control(self, test_reaction, scale=0.001):
         assert test_reaction in self.model.reactions
 
         rmid = self.r[-1][self.product_reaction]
         kmid = test_reaction.get_kfor(self.model.T, self.model.N0)
+        if isinstance(kmid, sym.Basic):
+            subs = {}
+            for species in self.species_symbols:
+                subs[species.symbol] = self.U[-1][species]
+            kmid = kmid.subs(subs)
 
         test_reaction.set_scale('kfor', 1.0 - scale)
         test_reaction.set_scale('krev', 1.0 - scale)
         klow = test_reaction.get_kfor(self.model.T, self.model.N0)
         model = self.model.copy()
         try:
-            U1, dU1, r1 = model.solve(self.dt, 4)
+            U1, dU1, r1 = model.solve(self.dt, 100)
         except:
             test_reaction.set_scale('kfor', 1.0)
             test_reaction.set_scale('krev', 1.0)
@@ -43,13 +53,18 @@ class ModelAnalysis(object):
             model.finalize()
         self.check_converged(U1, dU1, r1)
         rlow = r1[-1][self.product_reaction]
+        if isinstance(klow, sym.Basic):
+            subs = {}
+            for species in self.species_symbols:
+                subs[species.symbol] = U1[-1][species]
+            klow = klow.subs(subs)
 
         test_reaction.set_scale('kfor', 1.0 + scale)
         test_reaction.set_scale('krev', 1.0 + scale)
         khigh = test_reaction.get_kfor(self.model.T, self.model.N0)
         model = self.model.copy()
         try:
-            U2, dU2, r2 = model.solve(self.dt, 4)
+            U2, dU2, r2 = model.solve(self.dt, 100)
         except:
             test_reaction.set_scale('kfor', 1.0)
             test_reaction.set_scale('krev', 1.0)
@@ -58,6 +73,11 @@ class ModelAnalysis(object):
             model.finalize()
         self.check_converged(U2, dU2, r2)
         rhigh = r2[-1][self.product_reaction]
+        if isinstance(khigh, sym.Basic):
+            subs = {}
+            for species in self.species_symbols:
+                subs[species.symbol] = U2[-1][species]
+            khigh = khigh.subs(subs)
         test_reaction.set_scale('kfor', 1.0)
         test_reaction.set_scale('krev', 1.0)
 
@@ -75,7 +95,7 @@ class ModelAnalysis(object):
         test_species.scale['H'] = 1.0 - scale
         model = self.model.copy()
         try:
-            U1, dU1, r1 = model.solve(self.dt, 4)
+            U1, dU1, r1 = model.solve(self.dt, 100)
         except:
             test_species.scale['S']['tot'] = 1.0
             test_species.scale['H'] = 1.0
@@ -85,12 +105,17 @@ class ModelAnalysis(object):
         glow = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U1, dU1, r1)
         rlow = r1[-1][self.product_reaction]
+        if isinstance(glow, sym.Basic):
+            subs = {}
+            for species in self.species_symbols:
+                subs[species.symbol] = U1[-1][species]
+            glow = glow.subs(subs)
 
         test_species.scale['S']['tot'] = 1.0 + scale
         test_species.scale['H'] = 1.0 + scale
         model = self.model.copy()
         try:
-            U2, dU2, r2 = model.solve(self.dt, 4)
+            U2, dU2, r2 = model.solve(self.dt, 100)
         except:
             test_species.scale['S']['tot'] = 1.0
             test_species.scale['H'] = 1.0
@@ -100,6 +125,11 @@ class ModelAnalysis(object):
         ghigh = test_species.get_H(T) - T * test_species.get_S(T)
         self.check_converged(U2, dU2, r2)
         rhigh = r2[-1][self.product_reaction]
+        if isinstance(ghigh, sym.Basic):
+            subs = {}
+            for species in self.species_symbols:
+                subs[species.symbol] = U2[-1][species]
+            ghigh = ghigh.subs(subs)
 
         test_species.scale['S']['tot'] = 1.0
         test_species.scale['H'] = 1.0
@@ -112,7 +142,7 @@ class ModelAnalysis(object):
 
         model = self.model.copy()
         model.set_temperature(T - dT)
-        U1, dU1, r1 = model.solve(self.dt, 4)
+        U1, dU1, r1 = model.solve(self.dt, 100)
         if model.fortran:
             model.finalize()
         self.check_converged(U1, dU1, r1)
@@ -121,7 +151,7 @@ class ModelAnalysis(object):
         
         model = self.model.copy()
         model.set_temperature(T + dT)
-        U2, dU2, r2 = model.solve(self.dt, 4)
+        U2, dU2, r2 = model.solve(self.dt, 100)
         if model.fortran:
             model.finalize()
         self.check_converged(U2, dU2, r2)
@@ -142,7 +172,7 @@ class ModelAnalysis(object):
         U0[test_species] = rholow
         model = self.model.copy()
         model.set_initial_conditions(U0)
-        U1, dU1, r1 = model.solve(self.dt, 4)
+        U1, dU1, r1 = model.solve(self.dt, 100)
         if model.fortran:
             model.finalize()
         self.check_converged(U1, dU1, r1)
@@ -151,7 +181,7 @@ class ModelAnalysis(object):
         rhohigh = rhomid * (1.0 + drho)
         U0[test_species] = rhohigh
         model.set_initial_conditions(U0)
-        U2, dU2, r2 = model.solve(self.dt, 4)
+        U2, dU2, r2 = model.solve(self.dt, 100)
         if model.fortran:
             model.finalize()
         self.check_converged(U2, dU2, r2)

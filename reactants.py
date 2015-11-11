@@ -23,7 +23,7 @@ class _Thermo(object):
     and vibration."""
 
     def __init__(self, dft, linear=False, symm=1, spin=0., ts=False, \
-            label=None, eref=None, metal=None):
+            label=None, eref=None, metal=None, dE=0.):
         self.T = None
 
         self.mode = ['tot', 'trans', 'trans2D', 'rot', 'vib', 'elec']
@@ -69,7 +69,7 @@ class _Thermo(object):
         self.spin = spin
         self.ts = ts
         self.label = label
-        self.coverage_dependence = 0.
+        self.dE = dE
         self.coord = 0
 
         self.scale_old = copy.deepcopy(self.scale)
@@ -89,8 +89,8 @@ class _Thermo(object):
         self.T = T
         self._calc_q(T)
         self.scale_old = copy.deepcopy(self.scale)
-        self.E['tot'] += self.coverage_dependence
-        self.H += self.coverage_dependence
+        self.E['tot'] += self.dE
+        self.H += self.dE
 
     def is_update_needed(self, T):
         if self.q['tot'] is None:
@@ -321,9 +321,9 @@ class _Thermo(object):
 class _Fluid(_Thermo):
     """Master object for both liquids and gasses"""
     def __init__(self, dft, linear=False, symm=1, spin=0., \
-            label=None, eref=None, rhoref=1.):
+            label=None, eref=None, rhoref=1., dE=0.):
         _Thermo.__init__(self, dft, linear, symm, \
-                spin, False, label, eref, None)
+                spin, False, label, eref, None, dE)
         self.ncut = 6 - self.linear + self.ts
         self.rho0 = rhoref
         assert np.all(self.freqs[self.ncut:] > 0), "Extra imaginary frequencies found!"
@@ -358,12 +358,11 @@ class Liquid(_Fluid):
 
 class Adsorbate(_Thermo):
     def __init__(self, dft, spin=0., ts=False, coord=1, label=None, \
-            eref=None, metal=None, coverage_dependence=0., symbol=None):
+            eref=None, metal=None, dE=0., symbol=None):
         _Thermo.__init__(self, dft, False, None, \
-                spin, ts, label, eref, metal)
+                spin, ts, label, eref, metal, dE)
         assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
         self.coord = coord
-        self.coverage_dependence = coverage_dependence
         self.symbol = symbol
 
     def get_reference_state(self):
@@ -393,7 +392,7 @@ class _DummyThermo(_Thermo):
         self.freqs = np.array(freqs) * _hplanck * 100 * J * _c
         self.rho0 = rhoref
         self.scale_old = self.scale.copy()
-        self.coverage_dependence = 0
+        self.dE = 0
 
     def _calc_qvib(self, T, ncut=0):
         self.E['vib'] = sum(self.freqs[ncut:])/2. * self.scale['E']['vib']
@@ -459,10 +458,10 @@ class DummyFluid(_DummyThermo):
 
 class DummyAdsorbate(_DummyThermo):
     def __init__(self, label, spin=0., ts=False, coord=1, freqs=[], E=0, \
-            coverage_dependence=0., gas=None, Floc=1., natoms=None, ZPE=None):
+            dE=0., gas=None, Floc=1., natoms=None, ZPE=None):
         self.coord = coord
         _DummyThermo.__init__(self, False, 1, spin, ts, freqs, label, E, 1.)
-        self.coverage_dependence = coverage_dependence
+        self.dE = dE
         self.gas = gas
         if self.gas is not None:
             self.atoms = self.gas.atoms

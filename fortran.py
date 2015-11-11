@@ -50,7 +50,7 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    call fidamalloc(t0, y0, yp0, iatol, rtol, atol, iout, &
                    rout, ipar, rpar, ier)
    ! set maximum number of steps
-   call fidasetiin('MAX_NSTEPS', 10000, ier)
+   call fidasetiin('MAX_NSTEPS', 500000, ier)
    ! set algebraic variables
    call fidasetvin('ID_VEC', id_vec, ier)
    ! set constraints (all yi >= 0.)
