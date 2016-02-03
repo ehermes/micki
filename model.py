@@ -701,7 +701,7 @@ class Model(object):
                 f.write(pyf_template.format(modname=modname, neq=self.nsymbols, nrates=len(self.rates)))
 
             f2py.compile(program, modulename=modname, extra_args='--compiler=intelem --fcompiler=intelem --quiet '
-            '--f90flags="-O1" '
+            '--f90flags="-O3" '
             '/usr/local/tmp/lib/libsundials_fida.a /usr/local/tmp/lib/libsundials_ida.a '
             '/usr/local/tmp/lib/libsundials_fnvecserial.a /usr/local/tmp/lib/libsundials_nvecserial.a ' +
             os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
