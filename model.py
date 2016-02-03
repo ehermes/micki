@@ -13,7 +13,7 @@ from ase.units import kB, _hplanck, kg, _k, _Nav, mol
 import sympy as sym
 
 from micki.reactants import _Thermo, _Fluid, _Reactants, Gas, Liquid, Adsorbate
-from micki.reactants import DummyFluid, DummyAdsorbate
+from micki.reactants import DummyFluid, DummyAdsorbate, Electron
 
 from assimulo.problem import Implicit_Problem
 
@@ -90,12 +90,31 @@ class Reaction(object):
         self.kfor = None
         self.krev = None
         self.T = None
-        self.N0 = None
+        self.Asite = None
         self.scale_params=['dH', 'dS', 'dH_act', 'dS_act', 'kfor', 'krev']
         self.scale = {}
         for param in self.scale_params:
             self.scale[param] = 1.0
         self.scale_old = self.scale.copy()
+
+        self.Nreact_fluid = 0
+        self.Nreact_ads = 0
+        for species in self.reactants:
+            if isinstance(species, _Fluid):
+                self.Nreact_fluid += 1
+            elif isinstance(species, Adsorbate):
+                self.Nreact_ads += 1
+
+        self.Nprod_fluid = 0
+        self.Nprod_ads = 0
+        for species in self.products:
+            if isinstance(species, _Fluid):
+                self.Nprod_fluid += 1
+            elif isinstance(species, Adsorbate):
+                self.Nprod_ads += 1
+
+        self.Nfluid = self.Nreact_fluid + self.Nprod_fluid
+        self.Nads = self.Nreact_ads + self.Nprod_ads
 
     def get_scale(self, param):
         try:
@@ -110,12 +129,12 @@ class Reaction(object):
         except KeyError:
             print("{} is not a valid scaling parameter name!".format(param))
 
-    def update(self, T=None, N0=None):
-        if not self.is_update_needed(T, N0):
+    def update(self, T=None, Asite=None, force=False):
+        if not force and not self.is_update_needed(T, Asite):
             return
 
         self.T = T
-        self.N0 = N0
+        self.Asite = Asite
         self.dH = self.products.get_H(T) - self.reactants.get_H(T)
         self.dH *= self.scale['dH']
         self.dS = self.products.get_S(T) - self.reactants.get_S(T)
@@ -157,11 +176,11 @@ class Reaction(object):
                         stacklevel=2)
                 self.dG_act = self.dG
         self._calc_keq(T)
-        self._calc_kfor(T, N0)
-        self._calc_krev(T, N0)
+        self._calc_kfor(T, Asite)
+        self._calc_krev(T, Asite)
         self.scale_old = self.scale.copy()
 
-    def is_update_needed(self, T, N0):
+    def is_update_needed(self, T, Asite):
         for species in self.species:
             if species.is_update_needed(T):
                 return True
@@ -169,23 +188,23 @@ class Reaction(object):
             return True
         if T is not None and T != self.T:
             return True
-        if N0 is not None and N0 != self.N0:
+        if Asite is not None and Asite != self.Asite:
             return True
         for param in self.scale_params:
             if self.scale[param] != self.scale_old[param]:
                 return True
         return False
 
-    def get_keq(self, T, N0):
-        self.update(T, N0)
+    def get_keq(self, T, Asite):
+        self.update(T, Asite)
         return self.keq
 
-    def get_kfor(self, T, N0):
-        self.update(T, N0)
+    def get_kfor(self, T, Asite):
+        self.update(T, Asite)
         return self.kfor
 
-    def get_krev(self, T, N0):
-        self.update(T, N0)
+    def get_krev(self, T, Asite):
+        self.update(T, Asite)
         return self.krev
 
     def _calc_keq(self, T):
@@ -194,7 +213,7 @@ class Reaction(object):
                 / self.reactants.get_reference_state() \
                 * self.scale['kfor'] / self.scale['krev']
 
-    def _calc_kfor(self, T, N0):
+    def _calc_kfor(self, T, Asite):
         barr = 1
         if self.ts is not None:
             barr *= sym.exp(-self.dG_act / (kB * T)) \
@@ -214,8 +233,8 @@ class Reaction(object):
                 self.kfor *= self.keq * self.scale['krev'] / self.scale['kfor']
         elif self.method == 'CT':
             # Collision Theory
-            # kfor = S0 / (N0 * sqrt(2 * pi * m * kB * T))
-            self.kfor = barr * (1000 * self.S0 * _Nav / N0) \
+            # kfor = S0 * Asite / (sqrt(2 * pi * m * kB * T))
+            self.kfor = barr * 1000 * self.S0 * _Nav * Asite \
                     * np.sqrt(_k * T * kg \
                     / (2 * np.pi * self.reactants.get_mass()))
         elif self.method == 'TST':
@@ -223,9 +242,8 @@ class Reaction(object):
             self.kfor = (_k * T / _hplanck) * barr
         else:
             raise ValueError("Method {} is not recognized!".format(self.method))
-        self.kfor *= self.scale['kfor']
 
-    def _calc_krev(self, T, N0):
+    def _calc_krev(self, T, Asite):
         self.krev = self.kfor / self.keq
 
     def __repr__(self):
@@ -243,7 +261,7 @@ class DummyReaction(Reaction):
         self.Ei = Ei
         self.A = A
 
-    def _calc_keq(self, T):
+    def _calc_keq(self, T, rhoref):
         self.dS = 0.
         self.dH = self.products.get_H(T) - self.reactants.get_H(T)
         for species in self.reactants:
@@ -263,11 +281,12 @@ class DummyReaction(Reaction):
         self.keq = sym.exp(-self.dH / (kB * T) + self.dS / kB) \
                 * self.products.get_reference_state() \
                 / self.reactants.get_reference_state() \
-                * self.scale['kfor'] / self.scale['krev']
+                * self.scale['kfor'] / self.scale['krev'] \
+                * rhoref**(self.Nreact_fluid - self.Nprod_fluid)
 
-    def _calc_kfor(self, T, N0):
+    def _calc_kfor(self, T, Asite, rhoref):
         if self.method == 'CT':
-            self.kfor = (1000 * self.S0 * _Nav / N0) * np.sqrt(_k * T * kg \
+            self.kfor = 1000 * self.S0 * _Nav * Asite * rhoref * np.sqrt(_k * T * kg \
                     / (2 * np.pi * self.reactants.get_mass()))
         else:
             if self.A is not None:
@@ -293,14 +312,17 @@ class DummyReaction(Reaction):
                     reactant.update(T)
                     Ei -= reactant.Eelec + reactant.Evib
             self.kfor = A * sym.exp(-Ei / (kB * T))
+        self.kfor *= rhoref**(self.Nreact_fluid - 1)
 
-    def _calc_krev(self, T, N0):
+    def _calc_krev(self, T, Asite, rhoref):
         self.krev = self.kfor / self.keq        
 
 
 class Model(object):
-    def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
-            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None, fortran=False):
+#    def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
+#            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None, fortran=False):
+    def __init__(self, reactions, vacancy, T, Asite, rhoref=1, coverage=1.0, z=0., nz=0, \
+            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None, V=None, fortran=False):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -309,6 +331,7 @@ class Model(object):
             self.reactions.append(reaction)
             for species in reaction.species:
                 self.add_species(species)
+
         self.add_species(vacancy)
         self.vacancy = vacancy
 
@@ -319,16 +342,16 @@ class Model(object):
             self.fixed.append(self.solvent)
         for species in self.fixed:
             assert species in self.species, "Unknown fixed species {}".format(species)
-        self.N0 = N0
         self.T = T
-        self.V = V
-        self.nsites = nsites
+        self.Asite = Asite
+        self.rhoref = rhoref
         self.coverage = coverage
         self.z = z
         self.nz = nz
         self.shape = shape
         self.D = D
         self.fortran = fortran
+        self.V = V
 
         # Do we need to consider diffusion?
         self.diffusion = False
@@ -336,6 +359,7 @@ class Model(object):
             if isinstance(species, Liquid):
                 assert nz > 3, "Must have at least three grid points for diffusion!"
                 assert z > 0., "Must specify stagnant layer thickness for diffusion!"
+                assert self.V is not None, "Must define volume for systems with diffusion!"
                 self.diffusion = True
                 break
 
@@ -350,7 +374,7 @@ class Model(object):
                 self.nliquid += 1
                 assert self.solvent is not None, "Must specify solvent!"
         for species in self.species:
-            if isinstance(species, Gas) or isinstance(species, DummyFluid):
+            if isinstance(species, Gas) or isinstance(species, DummyFluid) or isinstance(species, Electron):
                 newspecies.append(species)
         for species in self.species:
             if isinstance(species, Adsorbate) or isinstance(species, DummyAdsorbate):
@@ -406,25 +430,35 @@ class Model(object):
         self.is_rate_ads = []
         for reaction in self.reactions:
             rate_count = {species:0 for species in self.species}
-            rate_for = reaction.get_kfor(self.T, self.N0)
+
+            rate_for = reaction.get_kfor(self.T, self.Asite)
+            if reaction.method == 'CT':
+                rate_for *= self.rhoref
+            elif reaction.Nfluid != 0:
+                assert reaction.Nads == 0, "Error: Reaction not using CT, but has both Fluid and Adsorbate species!"
+                rate_for *= self.rhoref**(reaction.Nreact_fluid - 1)
             for species in reaction.reactants:
                 rate_for *= self.symbols_dict[species]
                 rate_count[species] -= 1
-            rate_rev = reaction.get_krev(self.T, self.N0)
+
+            rate_rev = reaction.get_krev(self.T, self.Asite)
+            if reaction.method == 'CT':
+                rate_rev *= self.rhoref
+            if reaction.Nfluid != 0:
+                rate_rev *= self.rhoref**(reaction.Nprod_fluid - 1)
             for species in reaction.products:
                 rate_rev *= self.symbols_dict[species]
                 rate_count[species] += 1
+
             if self.trans_cov_symbols is not None:
                 if isinstance(rate_for, sym.Basic):
                     rate_for = rate_for.subs(self.trans_cov_symbols)
                 if isinstance(rate_rev, sym.Basic):
                     rate_rev = rate_rev.subs(self.trans_cov_symbols)
-            if reaction.adsorption:
-                for species in reaction.reactants:
-                    if isinstance(species, Liquid):
-                        rate_count[species] *= self.nsites / self.dV[0]
-                    elif isinstance(species, (Gas, DummyFluid)):
-                        rate_count[species] *= self.nsites / self.V
+#            if reaction.adsorption:
+#                for species in reaction.reactants:
+#                    if isinstance(species, (_Fluid, DummyFluid)):
+#                        rate_count[species] *= self.rhoref
             self.rates.append(rate_for - rate_rev)
             self.rate_count.append(rate_count)
             self.is_rate_ads.append(reaction.adsorption)
@@ -506,7 +540,7 @@ class Model(object):
         self.nsymbols = len(self.symbols)
         self.trans_cov_symbols = {}
         for species in self.species:
-            if isinstance(species, Adsorbate) and species.symbol is not None:
+            if species.symbol is not None:
                 self.trans_cov_symbols[species.symbol] = self.symbols_dict[species]
         
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
@@ -519,10 +553,10 @@ class Model(object):
 
         # Volume of grid thickness per ads. site
         if self.diffusion:
-            self.dV = mol * self.zi * self.nsites * 1000 / (self.N0 * self.coverage)
+            self.dV = mol * self.zi * self.nsites * 1000 * self.Asite / self.coverage
             self.dV[-1] = self.V - self.dV.sum()
-            self.zi[-1] = self.N0 * self.coverage * self.dV[-1] \
-                    / (1000 * mol * self.nsites)
+            self.zi[-1] = self.coverage * self.dV[-1] \
+                    / (1000 * mol * self.nsites * self.Asite)
             self.dz = list(self.dz)
             self.dz.append(2 * self.zi[-1] - self.dz[-2])
             self.dz = np.array(self.dz)
@@ -549,18 +583,13 @@ class Model(object):
                         self.f_sym.append(f)
                 else:
                     continue
-            elif isinstance(species, (Gas, DummyFluid)):
-                if species not in self.fixed:
-                    for j, rate in enumerate(self.rates):
-                        f += self.rate_count[j][species] * rate
-            elif (isinstance(species, (Adsorbate, DummyAdsorbate)) 
-                    and species is not self.vacancy):
+            elif species is not self.vacancy and species not in self.fixed:
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
             elif species is self.vacancy:
                 f = 1
                 for a in self.species:
-                    if not isinstance(a, _Fluid):
+                    if isinstance(a, Adsorbate):
                         f -= self.symbols_dict[a] * a.coord
             if species not in self.fixed:
                 self.f_sym.append(f)
@@ -570,9 +599,14 @@ class Model(object):
         subs = {}
         for species in self.species:
             if species in self.fixed:
+                liquid = False
                 if isinstance(species, Liquid) and species is not self.solvent:
                     species = (species, self.nz - 1)
-                subs[self.symbols_dict[species]] = self.U0[species]
+                    liquid = True
+                U0i = self.U0[species]
+                if liquid or isinstance(species, (_Fluid, DummyFluid)):
+                    U0i /= self.rhoref
+                subs[self.symbols_dict[species]] = U0i 
 
         for i, f in enumerate(self.f_sym):
             self.f_sym[i] = sym.sympify(f).subs(subs)
@@ -588,11 +622,14 @@ class Model(object):
         for symbol in self.symbols:
             for species, isymbol in self.symbols_dict.items():
                 if symbol == isymbol:
-                    U0.append(self.U0[species])
+                    U0i = self.U0[species]
+                    if type(species) is tuple or isinstance(species, (_Fluid, DummyFluid)):
+                        U0i /= self.rhoref
+                    U0.append(U0i)
                     break
 
         if self.fortran:
-            self.finitialize(U0, 1e-8, [1e-10]*self.nsymbols, [], [], algvar)
+            self.finitialize(U0, 1e-9, [1e-11]*self.nsymbols, [], [], algvar)
         else:
             self.last_x = np.zeros_like(U0, dtype=float)
             self.update(np.array(U0))
@@ -664,7 +701,7 @@ class Model(object):
                 f.write(pyf_template.format(modname=modname, neq=self.nsymbols, nrates=len(self.rates)))
 
             f2py.compile(program, modulename=modname, extra_args='--compiler=intelem --fcompiler=intelem --quiet '
-            '--f90flags="-O3" '
+            '--f90flags="-O1" '
             '/usr/local/tmp/lib/libsundials_fida.a /usr/local/tmp/lib/libsundials_ida.a '
             '/usr/local/tmp/lib/libsundials_fnvecserial.a /usr/local/tmp/lib/libsundials_nvecserial.a ' +
             os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
@@ -730,8 +767,13 @@ class Model(object):
                 for j, symbol in enumerate(self.symbols):
                     for species, isymbol in self.symbols_dict.items():
                         if symbol == isymbol:
-                            Ui[species] = U1[j][i]
-                            dUi[species] = dU1[j][i]
+                            Uij = self.U1[i][j]
+                            dUij = self.dU1[i][j]
+                            if type(species) is tuple or isinstance(species, (_Fluid, DummyFluid)):
+                                Uij *= self.rhoref
+                                dUij *= self.rhoref
+                            Ui[species] = Uij
+                            dUi[species] = dUij
                 for j, reaction in enumerate(self.reactions):
                     ri[reaction] = r1[j][i]
                 self.U.append(Ui)
@@ -759,8 +801,13 @@ class Model(object):
             for j, symbol in enumerate(self.symbols):
                 for species, isymbol in self.symbols_dict.items():
                     if symbol == isymbol:
-                        Ui[species] = self.U1[i][j]
-                        dUi[species] = dU1[j]
+                        Uij = self.U1[i][j]
+                        dUij = dU1[j]
+                        if type(species) is tuple or isinstance(species, (_Fluid, DummyFluid)):
+                            Uij *= self.rhoref
+                            dUij *= self.rhoref
+                        Ui[species] = Uij
+                        dUi[species] = dUij
             self.U.append(Ui)
             self.dU.append(dUi)
             
@@ -775,7 +822,11 @@ class Model(object):
         self.initialized = False
 #        self.ffinalize()
     
-    def copy(self):
-        return Model(self.reactions, self.vacancy, self.T, self.V, self.nsites, \
-                self.N0, self.coverage, self.z, self.nz, self.shape, \
-                self.steady_state, self.fixed, self.D, self.solvent, self.U0, self.fortran)
+    def copy(self, initialize=True):
+        if initialize:
+            U0 = self.U0
+        else:
+            U0 = None
+        return Model(self.reactions, self.vacancy, self.T, self.Asite, self.rhoref, \
+                self.coverage, self.z, self.nz, self.shape, \
+                self.steady_state, self.fixed, self.D, self.solvent, U0, self.fortran)

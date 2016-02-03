@@ -5,6 +5,8 @@ import copy
 
 import numpy as np
 
+from ase import Atoms
+
 from ase.io import read
 
 from ase.db.row import AtomsRow
@@ -23,7 +25,7 @@ class _Thermo(object):
     and vibration."""
 
     def __init__(self, dft, linear=False, symm=1, spin=0., ts=False, \
-            label=None, eref=None, metal=None, dE=0.):
+            label=None, eref=None, metal=None, dE=0., symbol=None):
         self.T = None
 
         self.mode = ['tot', 'trans', 'trans2D', 'rot', 'vib', 'elec']
@@ -75,8 +77,10 @@ class _Thermo(object):
         self.scale_old = copy.deepcopy(self.scale)
 
         if self.eref is not None:
-            for symbol in self.atoms.get_chemical_symbols():
-                self.potential_energy -= self.eref[symbol]
+            for element in self.atoms.get_chemical_symbols():
+                self.potential_energy -= self.eref[element]
+
+        self.symbol = symbol
 
     def update(self, T=None):
         """Updates the object's thermodynamic properties"""
@@ -89,8 +93,8 @@ class _Thermo(object):
         self.T = T
         self._calc_q(T)
         self.scale_old = copy.deepcopy(self.scale)
-        self.E['tot'] += self.dE
-        self.H += self.dE
+#        self.E['tot'] += self.dE
+#        self.H += self.dE
 
     def is_update_needed(self, T):
         if self.q['tot'] is None:
@@ -103,7 +107,7 @@ class _Thermo(object):
 
     def get_H(self, T=None):
         self.update(T)
-        return self.H * self.scale['H']
+        return (self.H + self.dE) * self.scale['H']
 
     def get_S(self, T=None):
         self.update(T)
@@ -111,11 +115,11 @@ class _Thermo(object):
 
     def get_G(self, T=None):
         self.update(T)
-        return self.H * self.scale['H'] - T * self.S['tot'] * self.scale['S']['tot']
+        return (self.H + self.dE) * self.scale['H'] - T * self.S['tot'] * self.scale['S']['tot']
 
     def get_E(self, T=None):
         self.update(T)
-        return self.E['tot'] * self.scale['E']['tot']
+        return (self.E['tot'] + self.dE) * self.scale['E']['tot']
 
     def get_q(self, T=None):
         self.update(T)
@@ -321,9 +325,9 @@ class _Thermo(object):
 class _Fluid(_Thermo):
     """Master object for both liquids and gasses"""
     def __init__(self, dft, linear=False, symm=1, spin=0., \
-            label=None, eref=None, rhoref=1., dE=0.):
+            label=None, eref=None, rhoref=1., dE=0., symbol=None):
         _Thermo.__init__(self, dft, linear, symm, \
-                spin, False, label, eref, None, dE)
+                spin, False, label, eref, None, dE, symbol)
         self.ncut = 6 - self.linear + self.ts
         self.rho0 = rhoref
         assert np.all(self.freqs[self.ncut:] > 0), "Extra imaginary frequencies found!"
@@ -342,8 +346,52 @@ class _Fluid(_Thermo):
         self._calc_qvib(T, ncut=self.ncut)
         self.q['tot'] = self.q['trans'] * self.q['rot'] * self.q['vib']
         self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + self.E['vib']
+        #self.E['tot'] = self.E['elec'] + sum(self.freqs[self.ncut:])/2.
         self.H = self.E['tot'] #+ kB * T
         self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + self.S['vib']
+
+class Electron(_Thermo):
+    def __init__(self, E, symbol, label=''):
+        self.dE = 0.
+
+        self.mode = ['tot', 'trans', 'trans2D', 'rot', 'vib', 'elec']
+
+        self.q = dict.fromkeys(self.mode)
+        self.S = dict.fromkeys(self.mode)
+        self.E = dict.fromkeys(self.mode)
+        self.H = None
+
+        self.scale = {'E': dict.fromkeys(self.mode, 1.0),
+                      'S': dict.fromkeys(self.mode, 1.0),
+                      'H': 1.0}
+
+        self.T = None
+
+        self.coord = 0
+
+        self.atoms = Atoms()
+
+        self.E['tot'] = self.E['elec'] = self.H = E
+        self.S['tot'] = self.S['elec'] = 0.
+        self.q['tot'] = 1.
+
+        for contrib in ['trans', 'rot', 'vib']:
+            self.E[contrib] = 0.
+            self.S[contrib] = 0.
+            self.q[contrib] = 1.
+
+        self.symbol = symbol
+
+        self.label = label
+
+    def get_reference_state(self):
+        return 1.
+
+    def copy(self):
+        return self.__class__(self.E, self.symbol, self.label)
+
+    def _calc_q(self, T):
+        pass
 
 
 class Gas(_Fluid):
@@ -360,10 +408,9 @@ class Adsorbate(_Thermo):
     def __init__(self, dft, spin=0., ts=False, coord=1, label=None, \
             eref=None, metal=None, dE=0., symbol=None):
         _Thermo.__init__(self, dft, False, None, \
-                spin, ts, label, eref, metal, dE)
+                spin, ts, label, eref, metal, dE, symbol)
         assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
         self.coord = coord
-        self.symbol = symbol
 
     def get_reference_state(self):
         return 1.
@@ -373,6 +420,7 @@ class Adsorbate(_Thermo):
         self._calc_qelec(T)
         self.q['tot'] = self.q['vib']
         self.E['tot'] = self.E['elec'] + self.E['vib']
+        #self.E['tot'] = self.E['elec'] + sum(self.freqs[1 if self.ts else 0:])/2.
         self.H = self.E['tot'] #+ kB * T
         self.S['tot'] = self.S['elec'] + self.S['vib']
 

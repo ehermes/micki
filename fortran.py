@@ -27,7 +27,7 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    integer, external :: OMP_GET_NUM_THREADS
    
    iatol = 2
-   constr_vec = 1
+   constr_vec = 1.d0
    nthreads = OMP_GET_NUM_THREADS()
    
    y0 = y0in
@@ -50,15 +50,15 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    call fidamalloc(t0, y0, yp0, iatol, rtol, atol, iout, &
                    rout, ipar, rpar, ier)
    ! set maximum number of steps
-   call fidasetiin('MAX_NSTEPS', 500000, ier)
+   call fidasetiin('MAX_NSTEPS', 5000000, ier)
    ! set algebraic variables
    call fidasetvin('ID_VEC', id_vec, ier)
    ! set constraints (all yi >= 0.)
    call fidasetvin('CONSTR_VEC', constr_vec, ier)
    ! initialize the solver
-   call fidadense(neq, ier)
+   call fidalapackdense(neq, ier)
    ! enable the jacobian
-   call fidadensesetjac(1, ier)
+   call fidalapackdensesetjac(1, ier)
 
 end subroutine initialize
 
@@ -70,6 +70,10 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    
    integer*8, intent(in) :: neqin, nt, nrates
    real*8, intent(in) :: tfinal
+
+   real*8 :: yp(neqin)
+   real*8 :: rpar(1)
+   integer*8 :: ipar(1)
    
    real*8, intent(out) :: t1(nt)
    real*8, intent(out) :: u1(neqin, nt), du1(neqin, nt)
@@ -78,6 +82,8 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    real*8 :: dt, tout
    integer*8 :: itask, ier
    integer*8 :: i
+
+   yp = 0.d0
 
    itask = 1
    dt = tfinal / (nt - 1)
@@ -92,6 +98,7 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    do i = 2, nt
       tout = tout + dt
       call fidasolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
+!      call fidaresfun(t1(i), u1(:, i), yp, du1(:, i), ipar, rpar, ier)
       call ratecalc({neq}, {nrates}, u1(:, i), r1(:, i))
    end do
 
