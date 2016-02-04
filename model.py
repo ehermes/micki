@@ -703,7 +703,8 @@ class Model(object):
             f2py.compile(program, modulename=modname, extra_args='--compiler=intelem --fcompiler=intelem --quiet '
             '--f90flags="-O3" '
             '/usr/local/tmp/lib/libsundials_fida.a /usr/local/tmp/lib/libsundials_ida.a '
-            '/usr/local/tmp/lib/libsundials_fnvecserial.a /usr/local/tmp/lib/libsundials_nvecserial.a ' +
+            '/usr/local/tmp/lib/libsundials_fnvecserial.a /usr/local/tmp/lib/libsundials_nvecserial.a '
+            '/opt/intel/composerxe-2013.3.174/mkl/lib/intel64/libmkl_rt.so ' +
             os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
 
             shutil.rmtree(dname)

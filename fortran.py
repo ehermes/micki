@@ -7,6 +7,7 @@ f90_template="""module solve_ida
    real*8 :: rout(10)
    real*8 :: y0({neq}), yp0({neq})
    real*8 :: diff({neq}), mas({neq}, {neq})
+   real*8 :: jac({neq}, {neq})
 
 end module solve_ida
 
@@ -55,10 +56,18 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    call fidasetvin('ID_VEC', id_vec, ier)
    ! set constraints (all yi >= 0.)
    call fidasetvin('CONSTR_VEC', constr_vec, ier)
+!   ! initialize the solver
+!   call fidalapackdense(neq, ier)
+!   ! enable the jacobian
+!   call fidalapackdensesetjac(1, ier)
    ! initialize the solver
-   call fidalapackdense(neq, ier)
+   call fidaspgmr(0, 0, 0, 0, 0, ier)
+!   call fidaspbcg(0, 0, 0, ier)
+!   call fidasptfqmr(0, 0, 0, ier)
    ! enable the jacobian
-   call fidalapackdensesetjac(1, ier)
+   call fidaspilssetjac(1, ier)
+   ! enable the preconditioner
+   call fidaspilssetprec(1, ier)
 
 end subroutine initialize
 
@@ -171,6 +180,79 @@ subroutine ratecalc(neqin, nrates, yin, rates)
 {ratecalc}
 
 end subroutine ratecalc
+
+subroutine fidajtimes(tres, yin, ypin, res, vin, fjv, cj, ewt, h, ipar, rpar, wk1, wk2, ier)
+
+   use solve_ida, only: neq
+
+   implicit none
+
+   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq), vin(neq), cj, h
+   real*8 :: ewt(*), wk1(*), wk2(*), rpar(*)
+   integer*8 :: ipar(*)
+   integer :: i
+
+   real*8, intent(out) :: fjv(neq)
+   integer*8, intent(out) :: ier
+
+   real*8 :: jac(neq, neq)
+
+   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
+                    ipar, rpar, wk1, wk2, wk2, ier)
+   
+   do i = 1, neq
+   fjv(i) = dot_product(vin, jac(i, :))
+   enddo
+
+end subroutine fidajtimes
+
+subroutine fidapsol(tres, yin, ypin, res, rvin, zv, cj, delta, ewt, ipar, rpar, wk1, ier)
+
+   use solve_ida, only: neq, jac
+
+   implicit none
+
+   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq), rvin(neq)
+   real*8, intent(in) :: cj, delta, ewt(*), rpar(*)
+   integer*8, intent(in) :: ipar(*)
+
+   real*8 :: wk1(*)
+   integer*8 :: ier
+
+   real*8, intent(out) :: zv(neq)
+
+   real*8 :: jaclu(neq, neq)
+   integer :: ipiv(neq)
+   integer :: i
+
+!   call fidadjac(neq, tres, yin, ypin, res, jaclu, cj, ewt, 1, &
+!                    ipar, rpar, wk1, wk1, wk1, ier)
+
+   zv = rvin
+   jaclu = jac
+   call dgesv(neq, 1, jaclu, neq, ipiv, zv, neq, ier)
+
+end subroutine fidapsol
+
+subroutine fidapset(tres, yin, ypin, res, cj, ewt, h, ipar, rpar, wk1, wk2, wk3, ier)
+
+   use solve_ida, only: neq, jac
+
+   implicit none
+
+   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq)
+   real*8, intent(in) :: cj, ewt(*), h, rpar(*)
+   real*8 :: wk1(*), wk2(*), wk3(*)
+
+   integer*8, intent(in) :: ipar(*)
+
+   integer*8, intent(out) :: ier
+
+   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
+                    ipar, rpar, wk1, wk2, wk3, ier)
+
+end subroutine fidapset
+
    """
 
 
