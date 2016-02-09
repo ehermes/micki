@@ -185,7 +185,7 @@ class ModelAnalysis(object):
         U0[test_species] = rholow
         model = self.model.copy(initialize=False)
         model.set_initial_conditions(U0)
-        U1, dU1, r1 = model.solve(self.dt, 1000)
+        U1, dU1, r1 = model.solve(self.dt, 100)
         if model.fortran:
             model.finalize()
         self.check_converged(U1, dU1, r1)
@@ -194,7 +194,7 @@ class ModelAnalysis(object):
         rhohigh = rhomid * (1.0 + drho)
         U0[test_species] = rhohigh
         model.set_initial_conditions(U0)
-        U2, dU2, r2 = model.solve(self.dt, 1000)
+        U2, dU2, r2 = model.solve(self.dt, 100)
         if model.fortran:
             model.finalize()
         self.check_converged(U2, dU2, r2)

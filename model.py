@@ -83,7 +83,7 @@ class Reaction(object):
             self.method = method
         if isinstance(self.method, str):
             self.method = self.method.upper()
-        if self.adsorption and self.method not in ['EQUIL', 'CT']:
+        if self.adsorption and self.method not in ['EQUIL', 'CT', 'ER']:
             raise ValueError("Method {} unsupported for adsorption reactions!".format(self.method))
         self.S0 = S0
         self.keq = None
@@ -234,9 +234,37 @@ class Reaction(object):
         elif self.method == 'CT':
             # Collision Theory
             # kfor = S0 * Asite / (sqrt(2 * pi * m * kB * T))
+            m = 0.
+            for species in self.reactants:
+                if isinstance(species, _Fluid):
+                    m += species.atoms.get_masses().sum()
             self.kfor = barr * 1000 * self.S0 * _Nav * Asite \
                     * np.sqrt(_k * T * kg \
-                    / (2 * np.pi * self.reactants.get_mass()))
+                    / (2 * np.pi * m))
+#            self.kfor = barr * 1000 * self.S0 * _Nav * Asite \
+#                    * np.sqrt(_k * T * kg \
+#                    / (2 * np.pi * self.reactants.get_mass()))
+        elif self.method == 'ER':
+            # Collision Theory
+            # kfor = S0 * Asite / (sqrt(2 * pi * m * kB * T))
+            m_react = 0.
+            for species in self.reactants:
+                if isinstance(species, _Fluid):
+                    m_react += species.atoms.get_masses().sum()
+            kfor1 = barr * 1000 * self.S0 * _Nav * Asite \
+                    * np.sqrt(_k * T * kg \
+                    / (2 * np.pi * m_react))
+
+            m_prod = 0.
+            for species in self.products:
+                if isinstance(species, _Fluid):
+                    m_prod = species.atoms.get_masses().sum()
+            #FIXME: barr should be different for reverse reaction
+            krev2 = barr * 1000 * self.S0 * _Nav * Asite \
+                    * np.sqrt(_k * T * kg \
+                    / (2 * np.pi * m_prod))
+            kfor2 = self.keq * krev2
+            self.kfor = kfor1 * kfor2 / (kfor1 + kfor2)
         elif self.method == 'TST':
             #Transition State Theory
             self.kfor = (_k * T / _hplanck) * barr
@@ -429,13 +457,14 @@ class Model(object):
         self.rate_count = []
         self.is_rate_ads = []
         for reaction in self.reactions:
+            reaction.update(T=self.T, Asite=self.Asite, force=True)
             rate_count = {species:0 for species in self.species}
 
             rate_for = reaction.get_kfor(self.T, self.Asite)
-            if reaction.method == 'CT':
+            if reaction.method in ['CT', 'ER']:
                 rate_for *= self.rhoref
             elif reaction.Nfluid != 0:
-                assert reaction.Nads == 0, "Error: Reaction not using CT, but has both Fluid and Adsorbate species!"
+                assert reaction.Nads == 0, "Error: Reaction not using CT or ER, but has both Fluid and Adsorbate species!"
                 rate_for *= self.rhoref**(reaction.Nreact_fluid - 1)
             for species in reaction.reactants:
                 rate_for *= self.symbols_dict[species]
@@ -476,7 +505,7 @@ class Model(object):
             if type(species) is tuple:
                 species = species[0]
             if species not in self.species:
-                raise ValueError("Unknown species!")
+                raise ValueError("Unknown species {}!".format(species))
             if (isinstance(species, (Adsorbate, DummyAdsorbate)) 
                     and species is not self.vacancy):
                 occsites += self.U0[species] * species.coord
@@ -591,6 +620,7 @@ class Model(object):
                 for a in self.species:
                     if isinstance(a, Adsorbate):
                         f -= self.symbols_dict[a] * a.coord
+#                f *= 10
             if species not in self.fixed:
                 self.f_sym.append(f)
             else:
@@ -629,7 +659,8 @@ class Model(object):
                     break
 
         if self.fortran:
-            self.finitialize(U0, 1e-9, [1e-11]*self.nsymbols, [], [], algvar)
+            #self.finitialize(U0, 1e-9, [1e-11]*self.nsymbols, [], [], algvar)
+            self.finitialize(U0, 1e-8, [1e-6]*self.nsymbols, [], [], algvar)
         else:
             self.last_x = np.zeros_like(U0, dtype=float)
             self.update(np.array(U0))
@@ -830,4 +861,4 @@ class Model(object):
             U0 = None
         return Model(self.reactions, self.vacancy, self.T, self.Asite, self.rhoref, \
                 self.coverage, self.z, self.nz, self.shape, \
-                self.steady_state, self.fixed, self.D, self.solvent, U0, self.fortran)
+                self.steady_state, self.fixed, self.D, self.solvent, U0, self.V, self.fortran)

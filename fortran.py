@@ -2,8 +2,8 @@ f90_template="""module solve_ida
 
    implicit none
    
-   integer*8 :: neq = {neq}
-   integer*8 :: iout(25)
+   integer :: neq = {neq}
+   integer :: iout(25)
    real*8 :: rout(10)
    real*8 :: y0({neq}), yp0({neq})
    real*8 :: diff({neq}), mas({neq}, {neq})
@@ -17,14 +17,14 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    
    implicit none
    
-   integer*8, intent(in) :: neqin, ipar(*)
+   integer, intent(in) :: neqin, ipar(*)
    real*8, intent(in) :: y0in(neqin), rtol, atol(*)
    real*8, intent(in) :: rpar(*)
    real*8, intent(in) :: id_vec(neqin)
    real*8 :: constr_vec(neqin)
    real*8 :: t0, yptmp(neqin)
-   integer*8 :: nthreads, iatol, ier
-   integer*8 :: i
+   integer :: nthreads, iatol, ier
+   integer :: i
    integer, external :: OMP_GET_NUM_THREADS
    
    iatol = 2
@@ -50,47 +50,59 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    ! allocate memory
    call fidamalloc(t0, y0, yp0, iatol, rtol, atol, iout, &
                    rout, ipar, rpar, ier)
-   ! set maximum number of steps
-   call fidasetiin('MAX_NSTEPS', 5000000, ier)
+   ! set maximum number of steps (default = 500)
+   call fidasetiin('MAX_NSTEPS', 500000, ier)
+!   ! set maximum number of nonlinear iterations (default = 4)
+!   call fidasetiin('MAX_NITERS', 2, ier)
+!   ! set maximum number of error test failures (default = 10)
+!   call fidasetiin('MAX_ERRFAILS', 50, ier)
+!   ! set maximum number of convergence failures (default = 10)
+!   call fidasetiin('MAX_CONVFAIL', 50, ier)
+   ! set maximum order for LMM method (default = 5)
+   call fidasetiin('MAX_ORD', 2, ier)
+!   ! set nonlinear convergence test coefficient (default = 0.33)
+!   call fidasetrin('NLCONV_COEF', 0.67d0, ier)
+   ! set initial step size
+   call fidasetrin('INIT_STEP', 1d-17, ier)
    ! set algebraic variables
    call fidasetvin('ID_VEC', id_vec, ier)
    ! set constraints (all yi >= 0.)
    call fidasetvin('CONSTR_VEC', constr_vec, ier)
-!   ! initialize the solver
-!   call fidalapackdense(neq, ier)
-!   ! enable the jacobian
-!   call fidalapackdensesetjac(1, ier)
    ! initialize the solver
-   call fidaspgmr(0, 0, 0, 0, 0, ier)
-!   call fidaspbcg(0, 0, 0, ier)
-!   call fidasptfqmr(0, 0, 0, ier)
+   call fidalapackdense(neq, ier)
    ! enable the jacobian
-   call fidaspilssetjac(1, ier)
-   ! enable the preconditioner
-   call fidaspilssetprec(1, ier)
+   call fidalapackdensesetjac(1, ier)
+!   ! initialize the solver
+!   call fidaspgmr(0, 0, 0, 0, 0, ier)
+!!   call fidaspbcg(0, 0, 0, ier)
+!!   call fidasptfqmr(0, 0, 0, ier)
+!   ! enable the jacobian
+!   call fidaspilssetjac(1, ier)
+!   ! enable the preconditioner
+!   call fidaspilssetprec(1, ier)
 
 end subroutine initialize
 
 subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
 
-   use solve_ida, only: y0, yp0
+   use solve_ida, only: y0, yp0, iout, rout
    
    implicit none
    
-   integer*8, intent(in) :: neqin, nt, nrates
+   integer, intent(in) :: neqin, nt, nrates
    real*8, intent(in) :: tfinal
 
    real*8 :: yp(neqin)
    real*8 :: rpar(1)
-   integer*8 :: ipar(1)
+   integer :: ipar(1)
    
    real*8, intent(out) :: t1(nt)
    real*8, intent(out) :: u1(neqin, nt), du1(neqin, nt)
    real*8, intent(out) :: r1(nrates, nt)
    
    real*8 :: dt, tout
-   integer*8 :: itask, ier
-   integer*8 :: i
+   integer :: itask, ier
+   integer :: i
 
    yp = 0.d0
 
@@ -129,8 +141,8 @@ subroutine fidaresfun(tres, yin, ypin, res, ipar, rpar, reserr)
    
    implicit none
    
-   integer*8, intent(in) :: ipar(*)
-   integer*8, intent(out) :: reserr
+   integer, intent(in) :: ipar(*)
+   integer, intent(out) :: reserr
    real*8, intent(in) :: tres, rpar(*)
    real*8, intent(in) :: yin(neq), ypin(neq)
    real*8, intent(out) :: res(neq)
@@ -152,8 +164,8 @@ use solve_ida, only: mas
 
    implicit none
    
-   integer*8 :: neqin, ipar(*)
-   integer*8 :: djacerr
+   integer :: neqin, ipar(*)
+   integer :: djacerr
    real*8 :: t, h, cj, rpar(*)
    real*8 :: yin(neqin), ypin(neqin), r(neqin), ewt(*), jac(neqin, neqin)
    real*8 :: wk1(*), wk2(*), wk3(*)
@@ -183,26 +195,28 @@ end subroutine ratecalc
 
 subroutine fidajtimes(tres, yin, ypin, res, vin, fjv, cj, ewt, h, ipar, rpar, wk1, wk2, ier)
 
-   use solve_ida, only: neq
+   use solve_ida, only: neq, jac
 
    implicit none
 
    real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq), vin(neq), cj, h
    real*8 :: ewt(*), wk1(*), wk2(*), rpar(*)
-   integer*8 :: ipar(*)
+   integer :: ipar(*)
    integer :: i
 
    real*8, intent(out) :: fjv(neq)
-   integer*8, intent(out) :: ier
+   integer, intent(out) :: ier
 
-   real*8 :: jac(neq, neq)
-
-   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
-                    ipar, rpar, wk1, wk2, wk2, ier)
+!   real*8 :: jac(neq, neq)
+!
+!   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
+!                    ipar, rpar, wk1, wk2, wk2, ier)
    
    do i = 1, neq
    fjv(i) = dot_product(vin, jac(i, :))
    enddo
+
+   ier = 0
 
 end subroutine fidajtimes
 
@@ -214,10 +228,10 @@ subroutine fidapsol(tres, yin, ypin, res, rvin, zv, cj, delta, ewt, ipar, rpar, 
 
    real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq), rvin(neq)
    real*8, intent(in) :: cj, delta, ewt(*), rpar(*)
-   integer*8, intent(in) :: ipar(*)
+   integer, intent(in) :: ipar(*)
 
    real*8 :: wk1(*)
-   integer*8 :: ier
+   integer :: ier
 
    real*8, intent(out) :: zv(neq)
 
@@ -225,11 +239,11 @@ subroutine fidapsol(tres, yin, ypin, res, rvin, zv, cj, delta, ewt, ipar, rpar, 
    integer :: ipiv(neq)
    integer :: i
 
+   jaclu = jac
 !   call fidadjac(neq, tres, yin, ypin, res, jaclu, cj, ewt, 1, &
 !                    ipar, rpar, wk1, wk1, wk1, ier)
 
    zv = rvin
-   jaclu = jac
    call dgesv(neq, 1, jaclu, neq, ipiv, zv, neq, ier)
 
 end subroutine fidapsol
@@ -244,9 +258,9 @@ subroutine fidapset(tres, yin, ypin, res, cj, ewt, h, ipar, rpar, wk1, wk2, wk3,
    real*8, intent(in) :: cj, ewt(*), h, rpar(*)
    real*8 :: wk1(*), wk2(*), wk3(*)
 
-   integer*8, intent(in) :: ipar(*)
+   integer, intent(in) :: ipar(*)
 
-   integer*8, intent(out) :: ier
+   integer, intent(out) :: ier
 
    call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
                     ipar, rpar, wk1, wk2, wk3, ier)
@@ -264,27 +278,27 @@ python module {modname} ! in
         module solve_ida ! in :{modname}:{modname}.f90
             real*8 dimension({neq}) :: yp0
             real*8 dimension(10) :: rout
-            integer*8 dimension(25) :: iout
+            integer dimension(25) :: iout
             real*8 dimension({neq},{neq}) :: mas
             real*8 dimension({neq}) :: y0
             real*8 dimension({neq}) :: diff
-            integer*8, optional :: neq={neq}
+            integer, optional :: neq={neq}
         end module solve_ida
         subroutine initialize(neqin,y0in,rtol,atol,ipar,rpar,id_vec) ! in :{modname}:{modname}.f90
             use solve_ida, only: mas,rout,iout,yp0,diff,y0,neq
-            integer*8, optional,intent(in),check(len(y0in)>=neqin),depend(y0in) :: neqin=len(y0in)
+            integer, optional,intent(in),check(len(y0in)>=neqin),depend(y0in) :: neqin=len(y0in)
             real*8 dimension(neqin),intent(in) :: y0in
             real*8 intent(in) :: rtol
             real*8 dimension(*),intent(in) :: atol
-            integer*8 dimension(*),intent(in) :: ipar
+            integer dimension(*),intent(in) :: ipar
             real*8 dimension(*),intent(in) :: rpar
             real*8 dimension(neqin),intent(in),depend(neqin) :: id_vec
         end subroutine initialize
         subroutine solve(neqin,nrates,nt,tfinal,t1,u1,du1,r1) ! in :{modname}:{modname}.f90
             use solve_ida, only: y0,yp0,neq
-            integer*8 intent(in) :: neqin
-            integer*8 intent(in) :: nrates
-            integer*8 intent(in) :: nt
+            integer intent(in) :: neqin
+            integer intent(in) :: nrates
+            integer intent(in) :: nt
             real*8 intent(in) :: tfinal
             real*8 intent(out),dimension(nt),depend(nt) :: t1
             real*8 intent(out),dimension(neqin,nt),depend(neqin,nt) :: u1
