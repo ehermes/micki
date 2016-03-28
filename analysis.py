@@ -33,7 +33,7 @@ class ModelAnalysis(object):
         assert test_reaction in self.model.reactions
 
         rmid = self.r[-1][self.product_reaction]
-        kmid = test_reaction.get_kfor(self.model.T, self.model.N0)
+        kmid = test_reaction.get_kfor(self.model.T, self.model.Asite)
         if isinstance(kmid, sym.Basic):
             subs = {}
             for species in self.species_symbols:
@@ -42,7 +42,7 @@ class ModelAnalysis(object):
 
         test_reaction.set_scale('kfor', 1.0 - scale)
         test_reaction.set_scale('krev', 1.0 - scale)
-        klow = test_reaction.get_kfor(self.model.T, self.model.N0)
+        klow = test_reaction.get_kfor(self.model.T, self.model.Asite)
         model = self.model.copy()
 
         try:
@@ -63,7 +63,7 @@ class ModelAnalysis(object):
 
         test_reaction.set_scale('kfor', 1.0 + scale)
         test_reaction.set_scale('krev', 1.0 + scale)
-        khigh = test_reaction.get_kfor(self.model.T, self.model.N0)
+        khigh = test_reaction.get_kfor(self.model.T, self.model.Asite)
         model = self.model.copy()
 
         try:
@@ -108,7 +108,7 @@ class ModelAnalysis(object):
             set_dg(species, -dg)
 
         for reaction in self.model.reactions:
-            reaction.update(T=self.model.T, N0=self.model.N0, force=True)
+            reaction.update(T=self.model.T, Asite=self.model.Asite, force=True)
 
         model = self.model.copy()
 
@@ -127,7 +127,7 @@ class ModelAnalysis(object):
             set_dg(species, dg)
 
         for reaction in self.model.reactions:
-            reaction.update(T=self.model.T, N0=self.model.N0, force=True)
+            reaction.update(T=self.model.T, Asite=self.model.Asite, force=True)
 
         model = self.model.copy()
 
@@ -138,7 +138,7 @@ class ModelAnalysis(object):
                 set_dg(species, -dg)
 
         for reaction in self.model.reactions:
-            reaction.update(T=self.model.T, N0=self.model.N0, force=True)
+            reaction.update(T=self.model.T, Asite=self.model.Asite, force=True)
 
         if model.fortran:
             model.finalize()
@@ -173,7 +173,7 @@ class ModelAnalysis(object):
 
         return kB * T**2 * (rhigh - rlow) / (rmid * 2 * dT)
 
-    def rate_order(self, test_species, drho=0.01):
+    def rate_order(self, test_species, drho=0.05):
         assert isinstance(test_species, _Fluid)
 
         rhomid = self.Uequil[test_species]
@@ -233,7 +233,7 @@ class ModelAnalysis(object):
                 set_dg(adsorbate, i * dg)
 
             for reaction in self.model.reactions:
-                reaction.update(T=self.model.T, N0=self.model.N0, force=True)
+                reaction.update(T=self.model.T, Asite=self.model.Asite, force=True)
 
             for j in [-1, 1]:
                 U0 = self.Uequil.copy()
@@ -249,7 +249,7 @@ class ModelAnalysis(object):
                 set_dg(adsorbate, -i * dg)
 
         for reaction in self.model.reactions:
-            reaction.update(T=self.model.T, N0=self.model.N0, force=True)
+            reaction.update(T=self.model.T, Asite=self.model.Asite, force=True)
 
         return (rhomid / rmid) * dr / (dg * drho)
 
@@ -257,4 +257,5 @@ class ModelAnalysis(object):
         for val in vals:
             for i, key in enumerate(val[0]):
                 if np.abs(val[-1][key] - val[-2][key]) > self.tol:
+                    print(key, val[-1][key], val[-1][key] - val[-2][key])
                     raise ValueError("Calculation not converged! Increase dt or use better initial guess.")

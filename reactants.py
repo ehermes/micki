@@ -72,7 +72,6 @@ class _Thermo(object):
         self.ts = ts
         self.label = label
         self.dE = dE
-        self.coord = 0
 
         self.scale_old = copy.deepcopy(self.scale)
 
@@ -81,6 +80,7 @@ class _Thermo(object):
                 self.potential_energy -= self.eref[element]
 
         self.symbol = symbol
+        self.sites = None
 
     def update(self, T=None):
         """Updates the object's thermodynamic properties"""
@@ -367,7 +367,7 @@ class Electron(_Thermo):
 
         self.T = None
 
-        self.coord = 0
+        self.sites = None
 
         self.atoms = Atoms()
 
@@ -405,12 +405,16 @@ class Liquid(_Fluid):
 
 
 class Adsorbate(_Thermo):
-    def __init__(self, dft, spin=0., ts=False, coord=1, label=None, \
-            eref=None, metal=None, dE=0., symbol=None):
+    def __init__(self, dft, spin=0., ts=False, label=None, \
+            eref=None, metal=None, dE=0., symbol=None, sites=None):
         _Thermo.__init__(self, dft, False, None, \
                 spin, ts, label, eref, metal, dE, symbol)
         assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
-        self.coord = coord
+
+        if isinstance(sites, Adsorbate):
+            self.sites = [sites]
+        else:
+            self.sites = sites
 
     def get_reference_state(self):
         return 1.
@@ -425,7 +429,7 @@ class Adsorbate(_Thermo):
         self.S['tot'] = self.S['elec'] + self.S['vib']
 
     def copy(self):
-        return self.__class__(self.dft, self.spin, self.ts, self.coord, \
+        return self.__class__(self.dft, self.spin, self.ts, \
                 self.label, self.eref, self.metal)
 
 class _DummyThermo(_Thermo):
@@ -467,7 +471,6 @@ class DummyFluid(_DummyThermo):
         if self.Stot_in is not None:
             self.Stot_in *= J / _Nav
         self.monatomic = monatomic
-        self.coord = 0
         self.H_in = H
         _DummyThermo.__init__(self, linear, symm, spin, ts, freqs, label, E, rhoref)
         if self.linear and len(self.freqs) < 3 * len(self.atoms) - 5:
@@ -505,9 +508,8 @@ class DummyFluid(_DummyThermo):
 
 
 class DummyAdsorbate(_DummyThermo):
-    def __init__(self, label, spin=0., ts=False, coord=1, freqs=[], E=0, \
+    def __init__(self, label, spin=0., ts=False, freqs=[], E=0, \
             dE=0., gas=None, Floc=1., natoms=None, ZPE=None):
-        self.coord = coord
         _DummyThermo.__init__(self, False, 1, spin, ts, freqs, label, E, 1.)
         self.dE = dE
         self.gas = gas
@@ -552,7 +554,7 @@ class DummyAdsorbate(_DummyThermo):
         return self.E['vib'] - self.gas.E['vib']
 
     def copy(self):
-        return self.__class__(self.label, self.spin, self.ts, self.coord, \
+        return self.__class__(self.label, self.spin, self.ts, \
                 self.freqs, self.potential_energy)
 
 
