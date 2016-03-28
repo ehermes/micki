@@ -7,4 +7,4 @@ written in Python.
  * ase
  * numpy
  * sympy
- * assimulo
+ * sundials (C library)

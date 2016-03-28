@@ -1,11 +1,15 @@
 """Module for doing sensitivity analysis of microkinetic model"""
 
 import collections
+
 import numpy as np
 import sympy as sym
+
 from ase.units import kB
+
 from micki.reactants import Adsorbate, _Fluid
 from micki.model import Model
+
 
 class ModelAnalysis(object):
     def __init__(self, model, product_reaction, Uequil, tol=1e-3, dt=3600):

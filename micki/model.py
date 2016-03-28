@@ -5,25 +5,17 @@ from __future__ import print_function
 import os
 import tempfile
 import shutil
+import warnings
+import time
 
 import numpy as np
-
-from ase.units import kB, _hplanck, kg, _k, _Nav, mol
-
 import sympy as sym
+
+from copy import copy
+from ase.units import kB, _hplanck, kg, _k, _Nav, mol
 
 from micki.reactants import _Thermo, _Fluid, _Reactants, Gas, Liquid, Adsorbate
 from micki.reactants import DummyFluid, DummyAdsorbate, Electron
-
-from assimulo.problem import Implicit_Problem
-
-from assimulo.solvers import IDA
-
-from copy import copy
-
-import warnings
-
-import time
 
 
 class Reaction(object):
@@ -406,7 +398,7 @@ class Model(object):
 #    def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
 #            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None, fortran=False):
     def __init__(self, reactions, T, Asite, rhoref=1, coverage=1.0, z=0., nz=0, \
-            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None, V=None, fortran=False):
+            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None, V=None):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -433,7 +425,6 @@ class Model(object):
         self.nz = nz
         self.shape = shape
         self.D = D
-        self.fortran = fortran
         self.V = V
 
         # Do we need to consider diffusion?
@@ -593,7 +584,7 @@ class Model(object):
         return self.rates_last
 
     def set_initial_conditions(self, U0):
-        if self.initialized and self.fortran:
+        if self.initialized:
             self.finalize()
 
         # Start with the incomplete user-provided initial conditions
@@ -775,24 +766,7 @@ class Model(object):
                     U0.append(U0i)
                     break
 
-        if self.fortran:
-            #self.finitialize(U0, 1e-9, [1e-11]*self.nsymbols, [], [], algvar)
-            self.finitialize(U0, 1e-8, [1e-8]*self.nsymbols, [], [], algvar)
-        else:
-            self.last_x = np.zeros_like(U0, dtype=float)
-            self.update(np.array(U0))
-            self.problem = Implicit_Problem(res=self.res, y0=U0, yd0=self.f(U0), t0=0.)
-            self.problem.jac = self.jac
-            self.sim = IDA(self.problem)
-            self.sim.verbosity = 50
-            self.sim.algvar = algvar
-            self.sim.atol = 1e-8
-            self.sim.rtol = 1e-6
-            try:
-                nthreads = os.environ['OMP_NUM_THREADS']
-            except KeyError:
-                nthreads = 1
-            self.sim.num_threads = nthreads
+        self.finitialize(U0, 1e-8, [1e-8]*self.nsymbols, [], [], algvar)
         self.initialized = True
 
     def setup_execs(self):
@@ -801,186 +775,109 @@ class Model(object):
         expressions.extend(self.jac_sym.reshape(self.nsymbols**2))
         expressions.extend(self.rates)
 
-        if self.fortran:
-            from micki.fortran import f90_template, pyf_template
-            from numpy import f2py
+        from micki.fortran import f90_template, pyf_template
+        from numpy import f2py
 
-            y_vec = sym.IndexedBase('yin', shape=(self.nsymbols,))
-            trans = {self.symbols[i]: y_vec[i + 1] for i in range(self.nsymbols)}
-            str_trans = {sym.fcode(self.symbols[i], source_format='free'): sym.fcode(y_vec[i + 1], source_format='free') for i in range(self.nsymbols)}
+        y_vec = sym.IndexedBase('yin', shape=(self.nsymbols,))
+        trans = {self.symbols[i]: y_vec[i + 1] for i in range(self.nsymbols)}
+        str_trans = {sym.fcode(self.symbols[i], source_format='free'): sym.fcode(y_vec[i + 1], source_format='free') for i in range(self.nsymbols)}
     
-            rescode = []
-            jaccode = []
-            ratecode = []
+        rescode = []
+        jaccode = []
+        ratecode = []
     
-            for i in range(self.nsymbols):
-                fcode = sym.fcode(self.f_sym[i], source_format='free')
-                for key, val in str_trans.items():
-                    fcode = fcode.replace(key, val)
-                rescode.append('   res({}) = '.format(i + 1) + fcode)
+        for i in range(self.nsymbols):
+            fcode = sym.fcode(self.f_sym[i], source_format='free')
+            for key, val in str_trans.items():
+                fcode = fcode.replace(key, val)
+            rescode.append('   res({}) = '.format(i + 1) + fcode)
     
-            for i in range(self.nsymbols):
-                for j in range(self.nsymbols):
-                    expr = self.jac_sym[j, i]
-                    if expr != 0:
-                        fcode = sym.fcode(expr, source_format='free')
-                        for key, val in str_trans.items():
-                            fcode = fcode.replace(key, val)
-                        jaccode.append('   jac({}, {}) = '.format(j + 1, i + 1) + fcode)
+        for i in range(self.nsymbols):
+            for j in range(self.nsymbols):
+                expr = self.jac_sym[j, i]
+                if expr != 0:
+                    fcode = sym.fcode(expr, source_format='free')
+                    for key, val in str_trans.items():
+                        fcode = fcode.replace(key, val)
+                    jaccode.append('   jac({}, {}) = '.format(j + 1, i + 1) + fcode)
 
-            for i, rate in enumerate(self.rates):
-                fcode = sym.fcode(rate, source_format='free')
-                for key, val in str_trans.items():
-                    fcode = fcode.replace(key, val)
-                ratecode.append('   rates({}) = '.format(i + 1) + fcode)
+        for i, rate in enumerate(self.rates):
+            fcode = sym.fcode(rate, source_format='free')
+            for key, val in str_trans.items():
+                fcode = fcode.replace(key, val)
+            ratecode.append('   rates({}) = '.format(i + 1) + fcode)
 
-            program = f90_template.format(neq=self.nsymbols, nx=1, nrates=len(self.rates), rescalc='\n'.join(rescode),
-                    jaccalc='\n'.join(jaccode), ratecalc='\n'.join(ratecode))
+        program = f90_template.format(neq=self.nsymbols, nx=1, nrates=len(self.rates), rescalc='\n'.join(rescode),
+                jaccalc='\n'.join(jaccode), ratecalc='\n'.join(ratecode))
 
-            dname = tempfile.mkdtemp()
-            modname = os.path.split(dname)[1]
-            fname = modname + '.f90'
-            pyfname = modname + '.pyf'
+        dname = tempfile.mkdtemp()
+        modname = os.path.split(dname)[1]
+        fname = modname + '.f90'
+        pyfname = modname + '.pyf'
 
-            with open('solve_ida.f90', 'w') as f:
-                f.write(program)
+        with open('solve_ida.f90', 'w') as f:
+            f.write(program)
 
-            with open(os.path.join(dname, pyfname), 'w') as f:
-                f.write(pyf_template.format(modname=modname, neq=self.nsymbols, nrates=len(self.rates)))
+        with open(os.path.join(dname, pyfname), 'w') as f:
+            f.write(pyf_template.format(modname=modname, neq=self.nsymbols, nrates=len(self.rates)))
 
-            f2py.compile(program, modulename=modname, extra_args='--compiler=intelem --fcompiler=intelem --quiet '
-            '--f90flags="-O3" '
-            '/usr/local/tmp/lib/libsundials_fida.a /usr/local/tmp/lib/libsundials_ida.a '
-            '/usr/local/tmp/lib/libsundials_fnvecserial.a /usr/local/tmp/lib/libsundials_nvecserial.a '
-            '/opt/intel/composerxe-2013.3.174/mkl/lib/intel64/libmkl_rt.so ' +
-            os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
+        f2py.compile(program, modulename=modname, extra_args='--compiler=intelem --fcompiler=intelem --quiet '
+        '--f90flags="-O3" '
+        '/usr/local/tmp/lib/libsundials_fida.a /usr/local/tmp/lib/libsundials_ida.a '
+        '/usr/local/tmp/lib/libsundials_fnvecserial.a /usr/local/tmp/lib/libsundials_nvecserial.a '
+        '/opt/intel/composerxe-2013.3.174/mkl/lib/intel64/libmkl_rt.so ' +
+        os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
 
-            shutil.rmtree(dname)
+        shutil.rmtree(dname)
 
-            solve_ida = __import__(modname)
+        solve_ida = __import__(modname)
 
-            self.finitialize = solve_ida.initialize
-            self.fsolve = solve_ida.solve
-            self.ffinalize = solve_ida.finalize
+        self.finitialize = solve_ida.initialize
+        self.fsolve = solve_ida.solve
+        self.ffinalize = solve_ida.finalize
 
-            os.remove(modname + '.so')
-
-
-    def update(self, x):
-        if (x != self.last_x).any():
-            self.last_x = x
-            out = np.zeros(len(self.execs), dtype=float)
-#            for expression in self.subexp:
-#                x = np.append(x, expression(*x))
-            for i, expression in enumerate(self.execs):
-                out[i] = expression(*x)
-            self.f_last = out[:self.nsymbols]
-            self.jac_last = out[self.nsymbols:self.nsymbols**2 + self.nsymbols].reshape(self.nsymbols, self.nsymbols)
-            self.rates_last = out[-len(self.rates):]
-
-    def f(self, x, t=None):
-        self.update(x)
-        return self.f_last
-
-    def jac(self, c, t, y, yd):
-        self.update(y)
-        return self.jac_last - c * self.M
-
-    def mas(self):
-        return self.M
-
-    def res(self, t, x, s):
-        return self.f(x, t) - np.dot(self.M, s)
-
-    def adda(self, x, t, p):
-        return p + self.M
+        os.remove(modname + '.so')
 
     def solve(self, t, ncp):
-        if self.fortran:
-            self.t, U1, dU1, r1 = self.fsolve(self.nsymbols, len(self.rates), ncp, t)
-            self.U1 = U1.T
-            self.dU1 = dU1.T
-            self.r1 = r1.T
-            self.U = []
-            self.dU = []
-            self.r = []
-            for i, t in enumerate(self.t):
-                Ui = {}
-                dUi = {}
-                ri = {}
-                for species in self.fixed:
-                    if isinstance(species, Liquid) and species is not self.solvent:
-                        species = (species, self.nz - 1)
-                    dUi[species] = 0.
-                    Ui[species] = self.U0[species]
-                for j, symbol in enumerate(self.symbols):
-                    for species, isymbol in self.symbols_dict.items():
-                        if symbol == isymbol:
-                            Uij = self.U1[i][j]
-                            dUij = self.dU1[i][j]
-                            if type(species) is tuple or isinstance(species, (_Fluid, DummyFluid)):
-                                Uij *= self.rhoref
-                                dUij *= self.rhoref
-                            Ui[species] = Uij
-                            dUi[species] = dUij
-
-                j = 0
-                for reaction in self.reactions:
-                    ri[reaction] = r1[j][i]
-                    j += 1
-                    if reaction.all_liquid:
-                        for i in range(self.nz):
-                            ri[(reaction, i)] = r1[j][i]
-                            j += 1
-#                for j, reaction in enumerate(self.reactions):
-#                    ri[reaction] = r1[j][i]
-                self.U.append(Ui)
-                self.dU.append(dUi)
-                self.r.append(ri)
-            return self.U, self.dU, self.r
-        else:
-            self.t, self.U1, self.dU1 = self.sim.simulate(t, ncp)
-            return self._results()
-
-    def _results(self):
+        self.t, U1, dU1, r1 = self.fsolve(self.nsymbols, len(self.rates), ncp, t)
+        self.U1 = U1.T
+        self.dU1 = dU1.T
+        self.r1 = r1.T
         self.U = []
         self.dU = []
         self.r = []
         for i, t in enumerate(self.t):
-            dU1 = self.f(self.U1[i], t)
-            Ui = copy(self.U0)
+            Ui = {}
             dUi = {}
-            for species in self.species:
-                if species in self.fixed:
-                    if isinstance(species, Liquid):
-                        species = (species, self.nz - 1)
-                    dUi[species] = 0.
-            j = 0
+            ri = {}
+            for species in self.fixed:
+                if isinstance(species, Liquid) and species is not self.solvent:
+                    species = (species, self.nz - 1)
+                dUi[species] = 0.
+                Ui[species] = self.U0[species]
             for j, symbol in enumerate(self.symbols):
                 for species, isymbol in self.symbols_dict.items():
                     if symbol == isymbol:
                         Uij = self.U1[i][j]
-                        dUij = dU1[j]
+                        dUij = self.dU1[i][j]
                         if type(species) is tuple or isinstance(species, (_Fluid, DummyFluid)):
                             Uij *= self.rhoref
                             dUij *= self.rhoref
                         Ui[species] = Uij
                         dUi[species] = dUij
-            self.U.append(Ui)
-            self.dU.append(dUi)
-            
-            r = self.rate_calc(self.U1[i])
-            ri = {}
+
             j = 0
             for reaction in self.reactions:
-                ri[reaction] = r[j]
+                ri[reaction] = r1[j][i]
                 j += 1
                 if reaction.all_liquid:
                     for i in range(self.nz):
-                        ri[(reaction, i)] = r[j]
+                        ri[(reaction, i)] = r1[j][i]
                         j += 1
 #            for j, reaction in enumerate(self.reactions):
-#                ri[reaction] = r[j]
+#                ri[reaction] = r1[j][i]
+            self.U.append(Ui)
+            self.dU.append(dUi)
             self.r.append(ri)
         return self.U, self.dU, self.r
 
@@ -995,4 +892,4 @@ class Model(object):
             U0 = None
         return Model(self.reactions, self.T, self.Asite, self.rhoref, \
                 self.coverage, self.z, self.nz, self.shape, \
-                self.steady_state, self.fixed, self.D, self.solvent, U0, self.V, self.fortran)
+                self.steady_state, self.fixed, self.D, self.solvent, U0, self.V)

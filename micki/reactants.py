@@ -2,15 +2,11 @@
 and collections of species"""
 
 import copy
-
 import numpy as np
 
 from ase import Atoms
-
 from ase.io import read
-
 from ase.db.row import AtomsRow
-
 from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal, _Nav
 
 from micki.masses import masses
