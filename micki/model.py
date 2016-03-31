@@ -36,7 +36,7 @@ class Reaction(object):
             self.products = products
         else:
             raise NotImplementedError
-        
+
         # Determine the number of sites on the LHS and the RHS of the reaction,
         # then add "bare" sites as necessary to balance the site number.
         vacancies = {}
@@ -61,7 +61,7 @@ class Reaction(object):
                     vacancies[site] += 1
                 else:
                     vacancies[site] = 1
-        
+
         # If the user supplied "bare" sites, count them too
         for species in self.reactants:
             if species in vacancies:
@@ -124,7 +124,7 @@ class Reaction(object):
         self.T = None
         self.Asite = None
         self.scale_params=['dH', 'dS', 'dH_act', 'dS_act', 'kfor', 'krev']
-        
+
         # Scaling for sensitivity analysis, defaults to 1 (no scaling)
         self.scale = {}
         for param in self.scale_params:
@@ -133,7 +133,7 @@ class Reaction(object):
 
         # If the user supplied a TS, this should be None.
         self.dG_act = dG_act
-        
+
         # If all reactants are Liquid species, then this reaction can occur
         # at any point of the diffusion grid, not just near the catalyst
         # surface.
@@ -391,7 +391,7 @@ class DummyReaction(Reaction):
         self.kfor *= rhoref**(self.Nreact_fluid - 1)
 
     def _calc_krev(self, T, Asite, rhoref):
-        self.krev = self.kfor / self.keq        
+        self.krev = self.kfor / self.keq
 
 
 class Model(object):
@@ -483,7 +483,7 @@ class Model(object):
                     self.vacspecies[site] = [species]
                 else:
                     self.vacspecies[site].append(species)
-    
+
     def set_temperature(self, T):
         self.T = T
         if self.U0 is not None:
@@ -612,7 +612,7 @@ class Model(object):
                 if (species, self.nz - 1) in self.U0:
                     assert abs(self.U0[species] - self.U0[(species, self.nz - 1)]) < 1e-6, \
                             "Liquid concentrations not consistent!"
-        
+
         # Determine what the initial vacancy concentration should be
         for species in self.vacancy:
             # The site with the highest concentration is normalized to one, so no site should
@@ -676,7 +676,7 @@ class Model(object):
         for species in self.species:
             if species.symbol is not None:
                 self.trans_cov_symbols[species.symbol] = self.symbols_dict[species]
-        
+
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
         algvar = np.zeros(self.nsymbols, dtype=bool)
         for i, symboli in enumerate(self.symbols_all):
@@ -781,17 +781,17 @@ class Model(object):
         y_vec = sym.IndexedBase('yin', shape=(self.nsymbols,))
         trans = {self.symbols[i]: y_vec[i + 1] for i in range(self.nsymbols)}
         str_trans = {sym.fcode(self.symbols[i], source_format='free'): sym.fcode(y_vec[i + 1], source_format='free') for i in range(self.nsymbols)}
-    
+
         rescode = []
         jaccode = []
         ratecode = []
-    
+
         for i in range(self.nsymbols):
             fcode = sym.fcode(self.f_sym[i], source_format='free')
             for key, val in str_trans.items():
                 fcode = fcode.replace(key, val)
             rescode.append('   res({}) = '.format(i + 1) + fcode)
-    
+
         for i in range(self.nsymbols):
             for j in range(self.nsymbols):
                 expr = self.jac_sym[j, i]
@@ -821,12 +821,8 @@ class Model(object):
         with open(os.path.join(dname, pyfname), 'w') as f:
             f.write(pyf_template.format(modname=modname, neq=self.nsymbols, nrates=len(self.rates)))
 
-        f2py.compile(program, modulename=modname, extra_args='--compiler=intelem --fcompiler=intelem --quiet '
-        '--f90flags="-O3" '
-        '/usr/local/tmp/lib/libsundials_fida.a /usr/local/tmp/lib/libsundials_ida.a '
-        '/usr/local/tmp/lib/libsundials_fnvecserial.a /usr/local/tmp/lib/libsundials_nvecserial.a '
-        '/opt/intel/composerxe-2013.3.174/mkl/lib/intel64/libmkl_rt.so ' +
-        os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
+        f2py.compile(program, modulename=modname, extra_args='--quiet -lsundials_fida -lsundials_ida -lsundials_fnvecserial -lsundials_nvecserial -lmkl_rt ' +
+                     os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
 
         shutil.rmtree(dname)
 
@@ -884,7 +880,7 @@ class Model(object):
     def finalize(self):
         self.initialized = False
 #        self.ffinalize()
-    
+
     def copy(self, initialize=True):
         if initialize:
             U0 = self.U0

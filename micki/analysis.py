@@ -26,7 +26,7 @@ class ModelAnalysis(object):
         self.U, self.dU, self.r = self.model.solve(self.dt, 100)
         if model.fortran:
             model.finalize()
-        
+
         self.check_converged(self.U, self.dU, self.r)
         self.species_symbols = []
         for species in self.model.species:
@@ -164,7 +164,7 @@ class ModelAnalysis(object):
         self.check_converged(U1, dU1, r1)
 
         rlow = r1[-1][self.product_reaction]
-        
+
         model = self.model.copy(initialize=False)
         model.set_temperature(T + dT)
         model.set_initial_conditions(self.Uequil)
@@ -248,7 +248,7 @@ class ModelAnalysis(object):
 
                 Ui, dUi, ri = model.solve(self.dt, 100)
                 dr += i * j * ri[-1][self.product_reaction]
-            
+
             for adsorbate in adsorbates:
                 set_dg(adsorbate, -i * dg)
 

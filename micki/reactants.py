@@ -14,7 +14,7 @@ from micki.masses import masses
 
 class _Thermo(object):
     """Generic thermodynamics object
-    
+
     This is the base object that all reactant objects inherit from.
     It initializes many parameters and provides methods for calculating
     modeutions to the partition function from translation, rotation,
@@ -240,7 +240,7 @@ class _Thermo(object):
             for direction in selective[i]:
                 if direction:
                     index.append(i)
-        
+
         hess = np.zeros((len(index), len(index)), dtype=float)
 
         for i, v in enumerate(root.find('calculation/dynmat/varray[@name="hessian"]')):
@@ -543,7 +543,7 @@ class DummyAdsorbate(_DummyThermo):
         assert self.gas is not None
         self.update(T)
         return self.Floc * (self.Stot_gas - self.gas.S['trans'])
-    
+
     def get_dZPE(self, T):
         self.gas.update(T)
         self.update(T)

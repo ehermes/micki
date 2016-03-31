@@ -1,7 +1,7 @@
 f90_template="""module solve_ida
 
    implicit none
-   
+
    integer :: neq = {neq}
    integer :: iout(25)
    real*8 :: rout(10)
@@ -14,9 +14,9 @@ end module solve_ida
 subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
 
    use solve_ida, only: neq, iout, rout, y0, yp0, mas, diff
-   
+
    implicit none
-   
+
    integer, intent(in) :: neqin, ipar(*)
    real*8, intent(in) :: y0in(neqin), rtol, atol(*)
    real*8, intent(in) :: rpar(*)
@@ -26,18 +26,18 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    integer :: nthreads, iatol, ier
    integer :: i
    integer, external :: OMP_GET_NUM_THREADS
-   
+
    iatol = 2
    constr_vec = 1.d0
    nthreads = OMP_GET_NUM_THREADS()
-   
+
    y0 = y0in
    yp0 = 0
    yptmp = 0
    diff = id_vec
    mas = 0
    t0 = 0
-   
+
    do i = 1, neq
       mas(i, i) = id_vec(i)
    enddo
@@ -86,20 +86,20 @@ end subroutine initialize
 subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
 
    use solve_ida, only: y0, yp0, iout, rout
-   
+
    implicit none
-   
+
    integer, intent(in) :: neqin, nt, nrates
    real*8, intent(in) :: tfinal
 
    real*8 :: yp(neqin)
    real*8 :: rpar(1)
    integer :: ipar(1)
-   
+
    real*8, intent(out) :: t1(nt)
    real*8, intent(out) :: u1(neqin, nt), du1(neqin, nt)
    real*8, intent(out) :: r1(nrates, nt)
-   
+
    real*8 :: dt, tout
    integer :: itask, ier
    integer :: i
@@ -115,7 +115,7 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    du1(:, 1) = yp0
    t1(1) = 0.d0
    call ratecalc({neq}, {nrates}, u1(:, 1), r1(:, 1))
-   
+
    do i = 2, nt
       tout = tout + dt
       call fidasolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
@@ -128,19 +128,19 @@ end subroutine solve
 subroutine finalize
 
 !   use solve_ida, only: y0, yp0, jac, mas, diff
-   
+
    implicit none
-   
+
    call fidafree
-   
+
 end subroutine finalize
 
 subroutine fidaresfun(tres, yin, ypin, res, ipar, rpar, reserr)
 
    use solve_ida, only: neq, diff
-   
+
    implicit none
-   
+
    integer, intent(in) :: ipar(*)
    integer, intent(out) :: reserr
    real*8, intent(in) :: tres, rpar(*)
@@ -149,7 +149,7 @@ subroutine fidaresfun(tres, yin, ypin, res, ipar, rpar, reserr)
    real*8 :: x({nx})
 
    res = 0
-   
+
 {rescalc}
 
    res = res - diff * ypin
@@ -163,17 +163,17 @@ subroutine fidadjac(neqin, t, yin, ypin, r, jac, cj, ewt, h, &
 use solve_ida, only: mas
 
    implicit none
-   
+
    integer :: neqin, ipar(*)
    integer :: djacerr
    real*8 :: t, h, cj, rpar(*)
    real*8 :: yin(neqin), ypin(neqin), r(neqin), ewt(*), jac(neqin, neqin)
    real*8 :: wk1(*), wk2(*), wk3(*)
-   
+
    jac = 0
 
 {jaccalc}
-   
+
    jac = jac - cj * mas
    djacerr = 0
 
@@ -182,7 +182,7 @@ end subroutine fidadjac
 subroutine ratecalc(neqin, nrates, yin, rates)
 
    implicit none
-   
+
    integer, intent(in) :: neqin, nrates
    real*8, intent(in) :: yin(neqin)
    real*8, intent(out) :: rates(nrates)
@@ -211,7 +211,7 @@ subroutine fidajtimes(tres, yin, ypin, res, vin, fjv, cj, ewt, h, ipar, rpar, wk
 !
 !   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
 !                    ipar, rpar, wk1, wk2, wk2, ier)
-   
+
    do i = 1, neq
    fjv(i) = dot_product(vin, jac(i, :))
    enddo
