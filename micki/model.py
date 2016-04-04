@@ -613,6 +613,7 @@ class Model(object):
                     assert abs(self.U0[species] - self.U0[(species, self.nz - 1)]) < 1e-6, \
                             "Liquid concentrations not consistent!"
 
+        self.vactot = {}
         # Determine what the initial vacancy concentration should be
         for species in self.vacancy:
             # The site with the highest concentration is normalized to one, so no site should
@@ -620,7 +621,10 @@ class Model(object):
             assert occsites[species] <= 1., "Too many adsorbates on {}!".format(species)
             # If we didn't also specify an initial vacancy concentration, assume it is 1
             if species not in U0:
+                self.vactot[species] = 1.
                 U0[species] = 1. - occsites[species]
+            else:
+                self.vactot[species] = U0[species] + occsites[species]
 #            else:
 #                assert abs(1. - U0[self.vacancy] - occsites) < 1e-6, \
 #                        "Vacancy concentration not consistent!"
@@ -726,7 +730,7 @@ class Model(object):
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
             elif species in self.vacancy:
-                f = 1 - self.symbols_dict[species]
+                f = self.vactot[species] - self.symbols_dict[species]
                 for a in self.vacspecies[species]:
                     f -= self.symbols_dict[a]
             if species not in self.fixed:
