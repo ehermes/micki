@@ -20,7 +20,7 @@ class _Thermo(object):
     modeutions to the partition function from translation, rotation,
     and vibration."""
 
-    def __init__(self, dft, linear=False, symm=1, spin=0., ts=False, \
+    def __init__(self, dft, symm=1, spin=0., ts=False, \
             label=None, eref=None, metal=None, dE=0., symbol=None):
         self.T = None
 
@@ -62,7 +62,6 @@ class _Thermo(object):
                 self._read_hess_xml()
 
         self.potential_energy = self.atoms.get_potential_energy()
-        self.linear = linear
         self.symm = symm
         self.spin = spin
         self.ts = ts
@@ -129,9 +128,9 @@ class _Thermo(object):
 
     def _calc_qtrans2D(self, T):
         mtot = sum(self.mass) / kg
-        self.q['trans2D'] = 2 * np.pi * mtot * _k * T / _hplanck**2 / self.rho0
+        self.q['trans2D'] = 0.1 * 2 * np.pi * mtot * _k * T / _hplanck**2 / (mol * self.rho0)**(2./3.)
         self.E['trans2D'] = kB * T * self.scale['E']['trans2D']
-        self.S['trans2D'] = kB * (2 + np.log(self.q['trans2D'])) * self.scale['S']['trans2D']
+        self.S['trans2D'] = kB * (2. + np.log(self.q['trans2D'])) * self.scale['S']['trans2D']
 
     def _calc_qtrans(self, T):
         mtot = sum(self.mass) / kg
@@ -295,6 +294,14 @@ class _Thermo(object):
                 self.freqs[i] = -val.imag
         self.freqs.sort()
 
+    def _is_linear(self):
+        pos = self.atoms.get_positions()
+        vecs = pos[1:] - pos[0]
+        for vec in vecs[1:]:
+            if np.linalg.norm(np.cross(vecs[0], vec)) > 1e-8:
+                return False
+        return True
+
     def copy(self):
         raise NotImplementedError
 
@@ -320,10 +327,11 @@ class _Thermo(object):
 
 class _Fluid(_Thermo):
     """Master object for both liquids and gasses"""
-    def __init__(self, dft, linear=False, symm=1, spin=0., \
+    def __init__(self, dft, symm=1, spin=0., \
             label=None, eref=None, rhoref=1., dE=0., symbol=None):
-        _Thermo.__init__(self, dft, linear, symm, \
+        _Thermo.__init__(self, dft, symm, \
                 spin, False, label, eref, None, dE, symbol)
+        self.linear = self._is_linear()
         self.ncut = 6 - self.linear + self.ts
         self.rho0 = rhoref
         assert np.all(self.freqs[self.ncut:] > 0), "Extra imaginary frequencies found!"
@@ -332,7 +340,7 @@ class _Fluid(_Thermo):
         return self.rho0
 
     def copy(self):
-        return self.__class__(self.dft, self.linear, self.symm, self.spin, \
+        return self.__class__(self.dft, self.symm, self.spin, \
                 self.label, self.eref)
 
     def _calc_q(self, T):
@@ -403,7 +411,7 @@ class Liquid(_Fluid):
 class Adsorbate(_Thermo):
     def __init__(self, dft, spin=0., ts=False, label=None, \
             eref=None, metal=None, dE=0., symbol=None, sites=None):
-        _Thermo.__init__(self, dft, False, None, \
+        _Thermo.__init__(self, dft, 1, \
                 spin, ts, label, eref, metal, dE, symbol)
         assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
 

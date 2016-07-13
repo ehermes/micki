@@ -29,23 +29,35 @@ class ModelAnalysis(object):
         self.check_converged(self.U, self.dU, self.r)
         self.species_symbols = []
         for species in self.model.species:
-            if isinstance(species, Adsorbate) and species.symbol is not None:
+            if species.symbol is not None:
                 self.species_symbols.append(species)
 
     def campbell_rate_control(self, test_reaction, scale=0.001):
         assert test_reaction in self.model.reactions
 
         rmid = self.r[-1][self.product_reaction]
-        kmid = test_reaction.get_kfor(self.model.T, self.model.Asite)
+        keq = test_reaction.get_keq(self.model.T, self.model.Asite)
+
+        subs = {}
+        for species in self.species_symbols:
+            subs[species.symbol] = self.U[-1][species]
+
+        if isinstance(keq, sym.Basic):
+            keq = keq.subs(subs)
+        if keq >= 0:
+            kmid = test_reaction.get_kfor(self.model.T, self.model.Asite)
+        else:
+            kmid = test_reaction.get_krev(self.model.T, self.model.Asite)
+
         if isinstance(kmid, sym.Basic):
-            subs = {}
-            for species in self.species_symbols:
-                subs[species.symbol] = self.U[-1][species]
             kmid = kmid.subs(subs)
 
         test_reaction.set_scale('kfor', 1.0 - scale)
         test_reaction.set_scale('krev', 1.0 - scale)
-        klow = test_reaction.get_kfor(self.model.T, self.model.Asite)
+        if keq >= 0:
+            klow = test_reaction.get_kfor(self.model.T, self.model.Asite)
+        else:
+            klow = test_reaction.get_krev(self.model.T, self.model.Asite)
         model = self.model.copy()
 
         try:
@@ -65,7 +77,10 @@ class ModelAnalysis(object):
 
         test_reaction.set_scale('kfor', 1.0 + scale)
         test_reaction.set_scale('krev', 1.0 + scale)
-        khigh = test_reaction.get_kfor(self.model.T, self.model.Asite)
+        if keq >= 0:
+            khigh = test_reaction.get_kfor(self.model.T, self.model.Asite)
+        else:
+            khigh = test_reaction.get_krev(self.model.T, self.model.Asite)
         model = self.model.copy()
 
         try:

@@ -20,7 +20,7 @@ from micki.reactants import DummyFluid, DummyAdsorbate, Electron
 
 class Reaction(object):
     def __init__(self, reactants, products, ts=None, method=None, S0=1., \
-            adsorption=False, dG_act=None):
+            adsorption=False, dG_act=None, dground=True):
 
         # Wrap reactants and products in _Reactants type
         if isinstance(reactants, _Thermo):
@@ -167,6 +167,8 @@ class Reaction(object):
         self.Nfluid = self.Nreact_fluid + self.Nprod_fluid
         self.Nads = self.Nreact_ads + self.Nprod_ads
 
+        self.dground = dground
+
     def get_scale(self, param):
         try:
             return self.scale[param]
@@ -199,33 +201,34 @@ class Reaction(object):
             self.dG_act = self.dH_act - self.T * self.dS_act
 
             # If there is a coverage dependence, assume everything has coverage 0
-            dG_act = self.dG_act
-            if isinstance(dG_act, sym.Basic):
-                subs = {}
-                for atom in dG_act.atoms():
-                    if isinstance(atom, sym.Symbol):
-                        subs[atom] = 0.
-                dG_act = dG_act.subs(subs)
-
-            if dG_act < 0.:
-                warnings.warn('Negative activation energy found for {}. '
-                        'Rounding to 0.'.format(self), RuntimeWarning, \
-                        stacklevel=2)
-                self.dG_act = 0.
-
-            dG_rev = self.dG_act - self.dG
-            if isinstance(dG_rev, sym.Basic):
-                subs = {}
-                for atom in dG_rev.atoms():
-                    if isinstance(atom, sym.Symbol):
-                        subs[atom] = 0.
-                dG_rev = dG_rev.subs(subs)
-
-            if dG_rev < 0.:
-                warnings.warn('Negative activation energy found for {}. '
-                        'Rounding to {}'.format(self, self.dG), RuntimeWarning, \
-                        stacklevel=2)
-                self.dG_act = self.dG
+            if self.dground:
+                dG_act = self.dG_act
+                if isinstance(dG_act, sym.Basic):
+                    subs = {}
+                    for atom in dG_act.atoms():
+                        if isinstance(atom, sym.Symbol):
+                            subs[atom] = 0.
+                    dG_act = dG_act.subs(subs)
+    
+                if dG_act < 0.:
+                    warnings.warn('Negative activation energy found for {}. '
+                            'Rounding to 0.'.format(self), RuntimeWarning, \
+                            stacklevel=2)
+                    self.dG_act = 0.
+    
+                dG_rev = self.dG_act - self.dG
+                if isinstance(dG_rev, sym.Basic):
+                    subs = {}
+                    for atom in dG_rev.atoms():
+                        if isinstance(atom, sym.Symbol):
+                            subs[atom] = 0.
+                    dG_rev = dG_rev.subs(subs)
+    
+                if dG_rev < 0.:
+                    warnings.warn('Negative activation energy found for {}. '
+                            'Rounding to {}'.format(self, self.dG), RuntimeWarning, \
+                            stacklevel=2)
+                    self.dG_act = self.dG
         self._calc_keq(T)
         self._calc_kfor(T, Asite)
         self._calc_krev(T, Asite)
@@ -271,7 +274,7 @@ class Reaction(object):
                     / self.reactants.get_reference_state()
 #                    * self.ts.get_reference_state() \
         if self.method == 'EQUIL':
-            self.kfor = _k * T  * barr / _hplanck
+            self.kfor = _k * T  * barr / _hplanck * self.scale['kfor']
             if isinstance(self.keq, sym.Basic):
                 subs = {}
                 for atom in self.keq.atoms():
@@ -449,7 +452,8 @@ class Model(object):
                 assert self.solvent is not None, "Must specify solvent!"
         for species in self.species:
             if isinstance(species, Gas) or isinstance(species, DummyFluid) or isinstance(species, Electron):
-                newspecies.append(species)
+                if species not in self.steady_state:
+                    newspecies.append(species)
         for species in self.species:
             if isinstance(species, Adsorbate) or isinstance(species, DummyAdsorbate):
                 if species not in self.steady_state and species not in self.vacancy:
@@ -682,7 +686,8 @@ class Model(object):
                 self.trans_cov_symbols[species.symbol] = self.symbols_dict[species]
 
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
-        algvar = np.zeros(self.nsymbols, dtype=bool)
+#        algvar = np.zeros(self.nsymbols, dtype=bool)
+        algvar = np.zeros(self.nsymbols, dtype=float)
         for i, symboli in enumerate(self.symbols_all):
             for j, symbolj in enumerate(self.symbols):
                 if symboli == symbolj:
@@ -825,7 +830,7 @@ class Model(object):
         with open(os.path.join(dname, pyfname), 'w') as f:
             f.write(pyf_template.format(modname=modname, neq=self.nsymbols, nrates=len(self.rates)))
 
-        f2py.compile(program, modulename=modname, extra_args='--quiet -lsundials_fida -lsundials_ida -lsundials_fnvecserial -lsundials_nvecserial -lmkl_rt ' +
+        f2py.compile(program, modulename=modname, extra_args='--quiet --f90flags="-Wno-unused-dummy-argument -Wno-unused-variable" -lsundials_fida -lsundials_ida -lsundials_fnvecserial -lsundials_nvecserial -lmkl_rt ' +
                      os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
 
         shutil.rmtree(dname)

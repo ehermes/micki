@@ -73,9 +73,9 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    ! enable the jacobian
    call fidalapackdensesetjac(1, ier)
 !   ! initialize the solver
-!   call fidaspgmr(0, 0, 0, 0, 0, ier)
+!!   call fidaspgmr(0, 0, 0, 0, 0, ier)
 !!   call fidaspbcg(0, 0, 0, ier)
-!!   call fidasptfqmr(0, 0, 0, ier)
+!   call fidasptfqmr(0, 0, 0, ier)
 !   ! enable the jacobian
 !   call fidaspilssetjac(1, ier)
 !   ! enable the preconditioner
