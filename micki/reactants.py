@@ -126,9 +126,10 @@ class _Thermo(object):
     def _calc_q(self, T):
         raise NotImplementedError
 
-    def _calc_qtrans2D(self, T):
+    def _calc_qtrans2D(self, T, A):
         mtot = sum(self.mass) / kg
-        self.q['trans2D'] = 0.1 * 2 * np.pi * mtot * _k * T / _hplanck**2 / (mol * self.rho0)**(2./3.)
+        self.q['trans2D'] = 2 * np.pi * mtot * _k * T / _hplanck**2 * A
+#        self.q['trans2D'] = 0.1 * 2 * np.pi * mtot * _k * T / _hplanck**2 / (mol * self.rho0)**(2./3.)
         self.E['trans2D'] = kB * T * self.scale['E']['trans2D']
         self.S['trans2D'] = kB * (2. + np.log(self.q['trans2D'])) * self.scale['S']['trans2D']
 
@@ -403,9 +404,17 @@ class Gas(_Fluid):
 
 
 class Liquid(_Fluid):
+    def __init__(self, dft, symm=1, spin=0., \
+            label=None, eref=None, rhoref=1., dE=0., symbol=None, S=None, D=None):
+        _Fluid.__init__(self, dft, symm, spin, label, eref, rhoref, dE, symbol)
+        self.Sliq = S
+        self.D = D
+
     def _calc_q(self, T):
         _Fluid._calc_q(self, T)
-        self.S['tot'] += kB * np.log(kB * T * mol / (100 * Pascal * m**3)) - 8.7291e-4
+        #self.S['tot'] += kB * np.log(kB * T * mol / (100 * Pascal * m**3)) - 8.7291e-4
+        #self.S['tot'] -= 8.729051950576513e-4
+        self.S['tot'] = self.Sliq
 
 
 class Adsorbate(_Thermo):
