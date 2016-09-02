@@ -1005,7 +1005,7 @@ class Model(object):
             f.write(pyf_template.format(modname=modname, neq=self.nsymbols, nrates=len(self.rates)))
     
         # Compile the module with f2py
-        f2py.compile(program, modulename=modname, extra_args='--quiet --f90flags="-Wno-unused-dummy-argument -Wno-unused-variable -w" -lsundials_fida -lsundials_ida -lsundials_fnvecserial -lsundials_nvecserial -lmkl_rt ' +
+        f2py.compile(program, modulename=modname, extra_args='--quiet --f90flags="-Wno-unused-dummy-argument -Wno-unused-variable -w" -lsundials_fida -lsundials_ida -lsundials_fnvecserial -lsundials_nvecserial -lmkl_rt -liomp5 ' +
                      os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
         
         # Delete the temporary directory
