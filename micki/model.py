@@ -304,7 +304,7 @@ class Reaction(object):
             for species in self.reactants:
                 if isinstance(species, _Fluid):
                     if found_fluid:
-                        raise ValueError, "At most one fluid can react with CT!"
+                        raise ValueError("At most one fluid can react with CT!")
                     found_fluid = True
                     fluid = species
             Sfluid = fluid.get_S(T)
@@ -337,12 +337,12 @@ class Reaction(object):
             self.kfor = kfor1 * kfor2 / (kfor1 + kfor2)
         elif self.method == 'DIFF':
             if L is None:
-                raise ValueError, "Must provide diffusion length for diffusion reactions!"
+                raise ValueError("Must provide diffusion length for diffusion reactions!")
             found_fluid = False
             for species in self.reactants:
                 if isinstance(species, _Fluid):
                     if found_fluid:
-                        raise ValueError, "Diffusion reaction must have exactly 1 fluid!"
+                        raise ValueError("Diffusion reaction must have exactly 1 fluid!")
                     found_fluid = True
                     D = species.D
             sites = 1
@@ -351,7 +351,7 @@ class Reaction(object):
                     for site in species.sites:
                         sites *= site.symbol
                 elif not isinstance(species, Electron):
-                    raise ValueError, "All products must be adsorbates in diffusion reaction!"
+                    raise ValueError("All products must be adsorbates in diffusion reaction!")
             self.kfor = 1000 * D * self.Asite * mol * barr * self.scale['kfor'] / (L * sites)
         elif self.method == 'TST':
             #Transition State Theory
@@ -470,12 +470,6 @@ class Model(object):
         self.nz = nz # Number of diffusion grid points
         self.shape = shape # Distribution of diffusion grid points
 
-#        if self.z is None:
-#            self.V = 1
-#        else:
-#            #self.V = _Nav * self.Asite * self.z * 2000
-#            self.V = 100
-
         # Do we need to consider diffusion?
         self.diffusion = False
         if nz > 1: # No numerical diffusion if there is only one grid point
@@ -486,7 +480,6 @@ class Model(object):
                     self.diffusion = True
                     break
 
-        # This is better than what I was doing above, but I need to debug this for now.
         if self.diffusion:
             self.V = _Nav * self.Asite * self.z * 2000
         else:
