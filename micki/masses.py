@@ -231,4 +231,3 @@ masses_1993 = {
         'Rg': None,
         'Cn': None,
         }
-

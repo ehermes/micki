@@ -36,7 +36,9 @@ class ModelAnalysis(object):
         assert test_reaction in self.model.reactions
 
         rmid = self.r[-1][self.product_reaction]
-        keq = test_reaction.get_keq(self.model.T, self.model.Asite, self.model.z)
+        keq = test_reaction.get_keq(self.model.T,
+                                    self.model.Asite,
+                                    self.model.z)
 
         subs = {}
         for species in self.species_symbols:
@@ -45,9 +47,13 @@ class ModelAnalysis(object):
         if isinstance(keq, sym.Basic):
             keq = keq.subs(subs)
         if keq >= 0:
-            kmid = test_reaction.get_kfor(self.model.T, self.model.Asite, self.model.z)
+            kmid = test_reaction.get_kfor(self.model.T,
+                                          self.model.Asite,
+                                          self.model.z)
         else:
-            kmid = test_reaction.get_krev(self.model.T, self.model.Asite, self.model.z)
+            kmid = test_reaction.get_krev(self.model.T,
+                                          self.model.Asite,
+                                          self.model.z)
 
         if isinstance(kmid, sym.Basic):
             kmid = kmid.subs(subs)
@@ -55,9 +61,13 @@ class ModelAnalysis(object):
         test_reaction.set_scale('kfor', 1.0 - scale)
         test_reaction.set_scale('krev', 1.0 - scale)
         if keq >= 0:
-            klow = test_reaction.get_kfor(self.model.T, self.model.Asite, self.model.z)
+            klow = test_reaction.get_kfor(self.model.T,
+                                          self.model.Asite,
+                                          self.model.z)
         else:
-            klow = test_reaction.get_krev(self.model.T, self.model.Asite, self.model.z)
+            klow = test_reaction.get_krev(self.model.T,
+                                          self.model.Asite,
+                                          self.model.z)
         model = self.model.copy()
 
         try:
@@ -78,9 +88,13 @@ class ModelAnalysis(object):
         test_reaction.set_scale('kfor', 1.0 + scale)
         test_reaction.set_scale('krev', 1.0 + scale)
         if keq >= 0:
-            khigh = test_reaction.get_kfor(self.model.T, self.model.Asite, self.model.z)
+            khigh = test_reaction.get_kfor(self.model.T,
+                                           self.model.Asite,
+                                           self.model.z)
         else:
-            khigh = test_reaction.get_krev(self.model.T, self.model.Asite, self.model.z)
+            khigh = test_reaction.get_krev(self.model.T,
+                                           self.model.Asite,
+                                           self.model.z)
         model = self.model.copy()
 
         try:
@@ -124,7 +138,10 @@ class ModelAnalysis(object):
             set_dg(species, -dg)
 
         for reaction in self.model.reactions:
-            reaction.update(T=self.model.T, Asite=self.model.Asite, L=self.model.z, force=True)
+            reaction.update(T=self.model.T,
+                            Asite=self.model.Asite,
+                            L=self.model.z,
+                            force=True)
 
         model = self.model.copy()
 
@@ -142,18 +159,24 @@ class ModelAnalysis(object):
             set_dg(species, dg)
 
         for reaction in self.model.reactions:
-            reaction.update(T=self.model.T, Asite=self.model.Asite, L=self.model.z, force=True)
+            reaction.update(T=self.model.T,
+                            Asite=self.model.Asite,
+                            L=self.model.z,
+                            force=True)
 
         model = self.model.copy()
 
         try:
             U2, dU2, r2 = model.solve(self.dt, 100)
-        finally: 
+        finally:
             for species in test_species:
                 set_dg(species, -dg)
 
         for reaction in self.model.reactions:
-            reaction.update(T=self.model.T, Asite=self.model.Asite, L=self.model.z, force=True)
+            reaction.update(T=self.model.T,
+                            Asite=self.model.Asite,
+                            L=self.model.z,
+                            force=True)
 
         model.finalize()
         self.check_converged(U2, dU2, r2)
@@ -227,7 +250,8 @@ class ModelAnalysis(object):
         if isinstance(gmid, sym.Basic):
             trans = {}
             for species in self.model.species:
-                if isinstance(species, Adsorbate) and species.symbol is not None:
+                if isinstance(species, Adsorbate) \
+                        and species.symbol is not None:
                     trans[species.symbol] = self.U[-1][species]
             gmid = gmid.subs(trans)
         dg = np.abs(gmid * g_scale * 2)
@@ -243,7 +267,10 @@ class ModelAnalysis(object):
                 set_dg(adsorbate, i * dg)
 
             for reaction in self.model.reactions:
-                reaction.update(T=self.model.T, Asite=self.model.Asite, L=self.model.z, force=True)
+                reaction.update(T=self.model.T,
+                                Asite=self.model.Asite,
+                                L=self.model.z,
+                                force=True)
 
             for j in [-1, 1]:
                 U0 = self.Uequil.copy()
@@ -259,7 +286,10 @@ class ModelAnalysis(object):
                 set_dg(adsorbate, -i * dg)
 
         for reaction in self.model.reactions:
-            reaction.update(T=self.model.T, Asite=self.model.Asite, L=self.model.z, force=True)
+            reaction.update(T=self.model.T,
+                            Asite=self.model.Asite,
+                            L=self.model.z,
+                            force=True)
 
         return (rhomid / rmid) * dr / (dg * drho)
 
@@ -268,4 +298,5 @@ class ModelAnalysis(object):
             for i, key in enumerate(val[0]):
                 if np.abs(val[-1][key] - val[-2][key]) > self.tol:
                     print(key, val[-1][key], val[-1][key] - val[-2][key])
-                    raise ValueError("Calculation not converged! Increase dt or use better initial guess.")
+                    raise ValueError("Calculation not converged! Increase "
+                                     "dt or use better initial guess.")

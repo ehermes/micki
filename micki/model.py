@@ -15,12 +15,12 @@ from copy import copy
 from ase.units import kB, _hplanck, kg, _k, _Nav, mol
 
 from micki.reactants import _Thermo, _Fluid, _Reactants, Gas, Liquid, Adsorbate
-from micki.reactants import DummyFluid, DummyAdsorbate, Electron
+from micki.reactants import Electron
 
 
 class Reaction(object):
-    def __init__(self, reactants, products, ts=None, method=None, S0=1., \
-            adsorption=False, dG_act=None, dground=False):
+    def __init__(self, reactants, products, ts=None, method=None, S0=1.,
+                 dG_act=None, dground=False):
 
         # Wrap reactants and products in _Reactants type
         if isinstance(reactants, _Thermo):
@@ -81,27 +81,32 @@ class Reaction(object):
         self.ts = None
         # The user supplied a transition state species
         if ts is not None:
-            assert dG_act is None, "Cannot specify both barrier height and transition state!"
+            assert dG_act is None, \
+                    "Cannot specify both barrier height and transition state!"
             # Wrap the TS in the _Reactants class
             if isinstance(ts, _Thermo):
                 self.ts = _Reactants([ts])
             elif isinstance(ts, _Reactants):
                 self.ts = ts
-            # Fail if the user supplies something other than a _Thermo or _Reactants
+            # Fail if the user supplies something other than a _Thermo
+            # or _Reactants
             else:
                 raise NotImplementedError
         # FIXME: Add stoichiometry checking to ensure logical reactions.
         # Caveat: Don't fail on unbalanced adsorption sites, since some
         # species take up more than one site.
-#        # Mass balance requires that each element in the reactant is preserved
-#        # in the product and in any transition states.
-#        for element in self.reactants.elements:
-#            assert self.reactants.elements[element] == self.products.elements[element]
-#            if self.ts is not None:
-#                assert self.reactants.elements[element] == self.ts.elements[element]
-        # FIXME: This code can probably be reworked to not require a
-        # user-supplied "adsorption" argument.
-        self.adsorption = adsorption
+        self.adsorption = False
+
+        adscheck = 0
+        for species in self.reactants:
+            if isinstance(species, _Fluid):
+                adscheck += 1
+        for species in self.products:
+            if isinstance(species, _Fluid):
+                break
+        else:
+            if adscheck == 1:
+                self.adsorption = True
 
         self.method = method
         if self.method is None:
@@ -113,9 +118,13 @@ class Reaction(object):
         if isinstance(self.method, str):
             self.method = self.method.upper()
 
-        # FIXME: this might fail on valid reactions, I haven't thought about it fully yet
-        if self.adsorption and self.method not in ['EQUIL', 'CT', 'ER', 'DIFF']:
-            raise ValueError("Method {} unsupported for adsorption reactions!".format(self.method))
+        # FIXME: this might fail on valid reactions,
+        # I haven't thought about it fully yet
+        if self.adsorption \
+                and self.method not in ['EQUIL', 'CT', 'ER', 'DIFF']:
+            raise ValueError(
+                    "Method {} unsupported for adsorption reactions!".format(
+                        self.method))
 
         self.S0 = S0
         self.keq = None
@@ -124,7 +133,7 @@ class Reaction(object):
         self.T = None
         self.Asite = None
         self.L = None
-        self.scale_params=['dH', 'dS', 'dH_act', 'dS_act', 'kfor', 'krev']
+        self.scale_params = ['dH', 'dS', 'dH_act', 'dS_act', 'kfor', 'krev']
 
         # Scaling for sensitivity analysis, defaults to 1 (no scaling)
         self.scale = {}
@@ -202,7 +211,8 @@ class Reaction(object):
             self.dS_act *= self.scale['dS_act']
             self.dG_act = self.dH_act - self.T * self.dS_act
 
-            # If there is a coverage dependence, assume everything has coverage 0
+            # If there is a coverage dependence, assume everything has
+            # coverage 0
             if self.dground:
                 dG_act = self.dG_act
                 if isinstance(dG_act, sym.Basic):
@@ -211,13 +221,13 @@ class Reaction(object):
                         if isinstance(atom, sym.Symbol):
                             subs[atom] = 0.
                     dG_act = dG_act.subs(subs)
-    
+
                 if dG_act < 0.:
                     warnings.warn('Negative activation energy found for {}. '
-                            'Rounding to 0.'.format(self), RuntimeWarning, \
-                            stacklevel=2)
+                                  'Rounding to 0.'.format(self),
+                                  RuntimeWarning, stacklevel=2)
                     self.dG_act = 0.
-    
+
                 dG_rev = self.dG_act - self.dG
                 if isinstance(dG_rev, sym.Basic):
                     subs = {}
@@ -225,11 +235,11 @@ class Reaction(object):
                         if isinstance(atom, sym.Symbol):
                             subs[atom] = 0.
                     dG_rev = dG_rev.subs(subs)
-    
+
                 if dG_rev < 0.:
                     warnings.warn('Negative activation energy found for {}. '
-                            'Rounding to {}'.format(self, self.dG), RuntimeWarning, \
-                            stacklevel=2)
+                                  'Rounding to {}'.format(self, self.dG),
+                                  RuntimeWarning, stacklevel=2)
                     self.dG_act = self.dG
         self._calc_keq(T)
         self._calc_kfor(T, Asite, L)
@@ -278,7 +288,7 @@ class Reaction(object):
                     / self.reactants.get_reference_state()
 #                    * self.ts.get_reference_state() \
         if self.method == 'EQUIL':
-            self.kfor = _k * T  * barr / _hplanck * self.scale['kfor']
+            self.kfor = _k * T * barr / _hplanck * self.scale['kfor']
             if isinstance(self.keq, sym.Basic):
                 subs = {}
                 for atom in self.keq.atoms():
@@ -290,21 +300,14 @@ class Reaction(object):
             if keq < 1:
                 self.kfor *= self.keq * self.scale['krev'] / self.scale['kfor']
         elif self.method == 'CT':
-            # Collision Theory
-            # kfor = S0 * Asite / (sqrt(2 * pi * m * kB * T))
-#            m = 0.
-#            for species in self.reactants:
-#                if isinstance(species, _Fluid):
-#                    m += species.atoms.get_masses().sum()
-#            self.kfor = barr * 1000 * self.S0 * _Nav * Asite \
-#                    * np.sqrt(_k * T * kg \
-#                    / (2 * np.pi * m)) * self.scale['kfor']
-            # New implementation
+            # CT is TST with the transition state being a non-interacting
+            # 2D ideal gas.
             found_fluid = False
             for species in self.reactants:
                 if isinstance(species, _Fluid):
                     if found_fluid:
-                        raise ValueError("At most one fluid can react with CT!")
+                        raise ValueError("At most one fluid "
+                                         "can react with CT!")
                     found_fluid = True
                     fluid = species
             Sfluid = fluid.get_S(T)
@@ -322,27 +325,29 @@ class Reaction(object):
                 if isinstance(species, _Fluid):
                     m_react += species.atoms.get_masses().sum()
             kfor1 = barr * 1000 * self.S0 * _Nav * Asite \
-                    * np.sqrt(_k * T * kg \
-                    / (2 * np.pi * m_react)) * self.scale['kfor']
+                * np.sqrt(_k * T * kg / (2 * np.pi * m_react)) \
+                * self.scale['kfor']
 
             m_prod = 0.
             for species in self.products:
                 if isinstance(species, _Fluid):
                     m_prod = species.atoms.get_masses().sum()
-            #FIXME: barr should be different for reverse reaction
+            # FIXME: barr should be different for reverse reaction
             krev2 = barr * 1000 * self.S0 * _Nav * Asite \
-                    * np.sqrt(_k * T * kg \
-                    / (2 * np.pi * m_prod)) * self.scale['krev']
+                * np.sqrt(_k * T * kg / (2 * np.pi * m_prod)) \
+                * self.scale['krev']
             kfor2 = self.keq * krev2
             self.kfor = kfor1 * kfor2 / (kfor1 + kfor2)
         elif self.method == 'DIFF':
             if L is None:
-                raise ValueError("Must provide diffusion length for diffusion reactions!")
+                raise ValueError("Must provide diffusion length "
+                                 "for diffusion reactions!")
             found_fluid = False
             for species in self.reactants:
                 if isinstance(species, _Fluid):
                     if found_fluid:
-                        raise ValueError("Diffusion reaction must have exactly 1 fluid!")
+                        raise ValueError("Diffusion reaction must "
+                                         "have exactly 1 fluid!")
                     found_fluid = True
                     D = species.D
             sites = 1
@@ -351,13 +356,16 @@ class Reaction(object):
                     for site in species.sites:
                         sites *= site.symbol
                 elif not isinstance(species, Electron):
-                    raise ValueError("All products must be adsorbates in diffusion reaction!")
-            self.kfor = 1000 * D * self.Asite * mol * barr * self.scale['kfor'] / (L * sites)
+                    raise ValueError("All products must be adsorbates "
+                                     "in diffusion reaction!")
+            self.kfor = 1000 * D * self.Asite * mol * barr \
+                * self.scale['kfor'] / (L * sites)
         elif self.method == 'TST':
-            #Transition State Theory
+            # Transition State Theory
             self.kfor = (_k * T / _hplanck) * barr * self.scale['kfor']
         else:
-            raise ValueError("Method {} is not recognized!".format(self.method))
+            raise ValueError("Method {} is not recognized!".format(
+                self.method))
 
     def _calc_krev(self, T, Asite, L=None):
         self.krev = self.kfor / self.keq
@@ -369,76 +377,11 @@ class Reaction(object):
         string += self.products.__repr__()
         return string
 
-class DummyReaction(Reaction):
-    def __init__(self, reactants, products, ts=None, method='EQUIL', S0=1., 
-            vacancy=None, Ei=None, A=None, adsorption=False):
-        Reaction.__init__(self, reactants, products, ts, method, S0, adsorption, 
-                vacancy)
-        self.Ei = Ei
-        self.A = A
-
-    def _calc_keq(self, T, rhoref):
-        self.dS = 0.
-        self.dH = self.products.get_H(T) - self.reactants.get_H(T)
-        for species in self.reactants:
-            if isinstance(species, DummyFluid):
-                self.dS -= species.Stot
-            elif isinstance(species, DummyAdsorbate):
-                self.dS -= species.get_S_gas(T)
-            else:
-                raise ValueError("Must pass dummy object!")
-        for species in self.products:
-            if isinstance(species, DummyFluid):
-                self.dS += species.Stot
-            elif isinstance(species, DummyAdsorbate):
-                self.dS += species.get_S_gas(T)
-            else:
-                raise ValueError("Must pass dummy object!")
-        self.keq = sym.exp(-self.dH / (kB * T) + self.dS / kB) \
-                * self.products.get_reference_state() \
-                / self.reactants.get_reference_state() \
-                * self.scale['kfor'] / self.scale['krev'] \
-                * rhoref**(self.Nreact_fluid - self.Nprod_fluid)
-
-    def _calc_kfor(self, T, Asite, rhoref):
-        if self.method == 'CT':
-            self.kfor = 1000 * self.S0 * _Nav * Asite * rhoref * np.sqrt(_k * T * kg \
-                    / (2 * np.pi * self.reactants.get_mass()))
-        else:
-            if self.A is not None:
-                A = self.A
-            else:
-                dS_act = 0
-                for ts in self.ts:
-                    ts.update(T)
-                    dS_act += ts.Svib
-                for reactant in self.reactants:
-                    reactant.update(T)
-                    dS_act -= reactant.Svib
-                A = (_k * T / _hplanck) * sym.exp(dS_act / kB)
-
-            if self.Ei is not None:
-                Ei = self.Ei
-            else:
-                Ei = 0
-                for ts in self.ts:
-                    ts.update(T)
-                    Ei += ts.Eelec + ts.Evib
-                for reactant in self.reactants:
-                    reactant.update(T)
-                    Ei -= reactant.Eelec + reactant.Evib
-            self.kfor = A * sym.exp(-Ei / (kB * T))
-        self.kfor *= rhoref**(self.Nreact_fluid - 1)
-
-    def _calc_krev(self, T, Asite, rhoref):
-        self.krev = self.kfor / self.keq
-
 
 class Model(object):
-#    def __init__(self, reactions, vacancy, T, V, nsites, N0, coverage=1.0, z=0., nz=0, \
-#            shape='FLAT', steady_state=[], fixed=[], D=None, solvent=None, U0=None, fortran=False):
-    def __init__(self, reactions, T, Asite, z=None, nz=1, \
-            shape='FLAT', steady_state=[], fixed=[], solvent=None, U0=None):
+    def __init__(self, reactions, T, Asite, z=None, nz=1,
+                 shape='FLAT', steady_state=[], fixed=[], solvent=None,
+                 U0=None):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -459,24 +402,25 @@ class Model(object):
         # Solvent must be fixed
         if self.solvent is not None and self.solvent not in self.fixed:
             self.fixed.append(self.solvent)
-        # Raise error if fixed species is not found in reactions (is this necessary?)
+        # Make sure all fixed species are in the model
         for species in self.fixed:
-            assert species in self.species, "Unknown fixed species {}".format(species)
+            self.add_species(species)
 
         # Other model parameters
-        self.T = T # System temperature
-        self.Asite = Asite # Area of adsorption site -- 1 per microkinetic model!
-        self.z = z # Diffusion length
-        self.nz = nz # Number of diffusion grid points
-        self.shape = shape # Distribution of diffusion grid points
+        self.T = T  # System temperature
+        self.Asite = Asite  # Area of adsorption site
+        self.z = z  # Diffusion length
+        self.nz = nz  # Number of diffusion grid points
+        self.shape = shape  # Distribution of diffusion grid points
 
         # Do we need to consider diffusion?
         self.diffusion = False
-        if nz > 1: # No numerical diffusion if there is only one grid point
+        if nz > 1:  # No numerical diffusion if there is only one grid point
             # No diffusion if there are no Liquid species in the system
             for species in self.species:
                 if isinstance(species, Liquid):
-                    assert self.z > 0, "Must specify boundary layer thickness for diffusion!"
+                    assert self.z > 0, "Must specify boundary layer " \
+                        "thickness for diffusion!"
                     self.diffusion = True
                     break
 
@@ -496,19 +440,20 @@ class Model(object):
                 # diffusion
                 if self.diffusion:
                     assert species.D is not None, \
-                            "Specify diffusion constant for {}!".format(species)
+                        "Specify diffusion constant for {}".format(species)
                     assert species not in self.steady_state, \
-                            "Can't have Liquid in steady state with diffusion!"
+                        "Can't have Liquid in steady state with diffusion!"
                 if species not in self.steady_state:
                     newspecies.append(species)
                 self.nliquid += 1
         for species in self.species:
-            if isinstance(species, (Gas, DummyFluid, Electron)):
+            if isinstance(species, (Gas, Electron)):
                 if species not in self.steady_state:
                     newspecies.append(species)
         for species in self.species:
-            if isinstance(species, (Adsorbate, DummyAdsorbate)):
-                if species not in self.steady_state and species not in self.vacancy:
+            if isinstance(species, Adsorbate):
+                if species not in self.steady_state \
+                        and species not in self.vacancy:
                     newspecies.append(species)
         for species in self.steady_state:
             newspecies.append(species)
@@ -523,7 +468,8 @@ class Model(object):
         self.U0 = U0
 
         self.initialized = False
-        # If the user supplied initial conditions, create and compile differential equations
+        # If the user supplied initial conditions, create and compile
+        # differential equations
         if self.U0 is not None:
             self.set_initial_conditions(self.U0)
 
@@ -550,10 +496,11 @@ class Model(object):
         if self.shape.upper() == 'FLAT':
             self.dz = np.ones(self.nz - 1, dtype=float)
         elif self.shape.upper() == 'GAUSSIAN':
-            self.dz = 1. / (np.exp(10 * (0.5 - np.arange(self.nz - 1, dtype=float) \
-                    / (self.nz - 2))) + 1.)
+            self.dz = (np.exp(10*(0.5 - np.arange(self.nz - 1, dtype=float) /
+                                  (self.nz - 2))) + 1.)**-1
         elif self.shape.upper() == 'EXP':
-            self.dz = np.exp(7. * np.arange(self.nz - 1, dtype=float) / (self.nz - 2))
+            self.dz = np.exp(7. * np.arange(self.nz - 1, dtype=float) /
+                             (self.nz - 2))
         self.dz *= self.z / self.dz.sum()
         self.zi = np.zeros(self.nz, dtype=float)
         for i in range(self.nz - 1):
@@ -562,7 +509,9 @@ class Model(object):
                 self.zi[i] += self.dz[i-1]/2.
         self.dV = _Nav * self.Asite * self.zi * 1000
         self.dV[-1] = self.V - self.dV.sum()
-        assert self.dV[-1] > 0, "Volume is too small/quiescent layer is too thick! dV[-1] = {}".format(self.dV[-1]) # THIS SHOULD NEVER HAPPEN ANYMORE
+        # THIS SHOULD NEVER HAPPEN ANYMORE:
+        assert self.dV[-1] > 0, "Volume is too small/quiescent layer is " \
+                                "too thick! dV[-1] = {}".format(self.dV[-1])
         self.zi[-1] = self.dV[-1] / (_Nav * self.Asite * 1000)
         self.dz = list(self.dz)
         self.dz.append(2 * self.zi[-1] - self.dz[-2])
@@ -583,29 +532,35 @@ class Model(object):
             if type(species) is tuple:
                 species = species[0]
 
-            # Throw an error if the user provides the concentration for a species we don't know about
+            # Throw an error if the user provides the concentration for a
+            # species we don't know about
             if species not in self.species:
                 raise ValueError("Unknown species {}!".format(species))
 
-            # If the species occupies a site, add its concentration to the occupied sites counter
+            # If the species occupies a site, add its concentration to the
+            # occupied sites counter
             if species.sites is not None:
                 for site in species.sites:
                     occsites[site] += self.U0[species]
 
-            # If we're specifying a Liquid concentration with diffusion enabled, U0[species]
+            # If we're specifying a Liquid concentration with diffusion
+            # enabled, U0[species]
             # must equal U0[(species, nz-1)]
             if self.diffusion and isinstance(species, Liquid):
                 if (species, self.nz - 1) in self.U0:
-                    assert abs(self.U0[species] - self.U0[(species, self.nz - 1)]) < 1e-6, \
-                            "Liquid concentrations not consistent!"
+                    assert abs(self.U0[species] -
+                               self.U0[(species, self.nz - 1)]) < 1e-6, \
+                               "Liquid concentrations not consistent!"
 
         self.vactot = {}
         # Determine what the initial vacancy concentration should be
         for species in self.vacancy:
-            # The site with the highest concentration is normalized to one, so no site should
-            # have an occupancy of over 1
-            assert occsites[species] <= 1., "Too many adsorbates on {}!".format(species)
-            # If we didn't also specify an initial vacancy concentration, assume it is 1
+            # The site with the highest concentration is normalized to one,
+            # so no site should have an occupancy of over 1
+            assert occsites[species] <= 1., \
+                    "Too many adsorbates on {}!".format(species)
+            # If we didn't also specify an initial vacancy concentration,
+            # assume it is 1
             if species not in U0:
                 self.vactot[species] = 1.
                 U0[species] = 1. - occsites[species]
@@ -645,7 +600,8 @@ class Model(object):
         M = np.ones(size, dtype=int)
         i = 0
         for species in self.species:
-            if self.diffusion and isinstance(species, Liquid) and species is not self.solvent:
+            if self.diffusion and isinstance(species, Liquid) \
+                    and species is not self.solvent:
                 i += self.nz
             else:
                 if species in self.steady_state or species in self.vacancy:
@@ -653,13 +609,14 @@ class Model(object):
                 i += 1
 
         # This creates a symbol for each species named modelparamX where X
-        # is a three-digit numerical identifier that corresponds to its position
-        # in the order of species
-        self.symbols_all = sym.symbols(' '.join(['modelparam{}'.format(str(i).zfill(3)) for i in range(size)]))
+        # is a three-digit numerical identifier that corresponds to its
+        # position in the order of species
+        self.symbols_all = sym.symbols(' '.join(['modelparam{}'.format(
+            str(i).zfill(3)) for i in range(size)]))
         # symbols_dict a Thermo object and returns its corresponding symbol
         self.symbols_dict = {}
-        # symbols ONLY includes species that will be in the differential equations.
-        # Fixed species are not included in this list
+        # symbols ONLY includes species that will be in the differential
+        # equations. Fixed species are not included in this list
         self.symbols = []
         i = 0
         for species in self.species:
@@ -676,9 +633,12 @@ class Model(object):
                         if not (j == self.nz - 1 and species in self.fixed):
                             self.symbols.append(self.symbols_all[i])
                         i += 1
+                # I don't remember what this is for, so I'm removing it for now
                 else:
-                    self.symbols_dict[(species, 0)] = self.symbols_all[i] # XXX what is this?
-                    self.symbols_dict[(species, 9)] = self.symbols_all[i] # XXX same question
+                    # I don't remember what this is for,
+                    # so I'm removing it for now
+                    # self.symbols_dict[(species, 0)] = self.symbols_all[i]
+                    # self.symbols_dict[(species, 9)] = self.symbols_all[i]
                     i += 1
             else:
                 self.symbols_dict[species] = self.symbols_all[i]
@@ -688,12 +648,13 @@ class Model(object):
 
         # nsymbols is the size of the differential equations
         self.nsymbols = len(self.symbols)
-        # trans_cov_symbols converts the species assigned symbol (species.symbol)
-        # to the model's internal symbol for that species
+        # trans_cov_symbols converts the species assigned symbol
+        # (species.symbol) to the model's internal symbol for that species
         self.trans_cov_symbols = {}
         for species in self.species:
             if species.symbol is not None:
-                self.trans_cov_symbols[species.symbol] = self.symbols_dict[species]
+                self.trans_cov_symbols[species.symbol] = \
+                        self.symbols_dict[species]
 
         # Create the final mass matrix of the proper dimensions
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
@@ -711,11 +672,11 @@ class Model(object):
         # f_sym is the SYMBOLIC master equation for all species
         self.f_sym = []
 
-        
         for species in self.species:
             f = 0
             # DETAILED BALANCE NOTE: See discussion in _rate_init
-            if self.diffusion and isinstance(species, Liquid) and species is not self.solvent:
+            if self.diffusion and isinstance(species, Liquid) \
+                    and species is not self.solvent:
                 for i in range(self.nz):
                     f = 0
                     # At each grid point, add all-liquid reaction rates
@@ -725,20 +686,23 @@ class Model(object):
                     # For all grid points except the first, add diffusion away
                     # from the surface
                     if i > 0:
-                        f += diff * (self.symbols_dict[(species, i-1)] \
-                                - self.symbols_dict[(species, i)]) / self.dz[i-1]
-                    # For all grid points except the last, add diffusion towards
-                    # the surface
+                        f += diff * (self.symbols_dict[(species, i-1)] -
+                                     self.symbols_dict[(species, i)]) \
+                                             / self.dz[i-1]
+                    # For all grid points except the last, add diffusion
+                    # towards the surface
                     if i < self.nz - 1:
-                        f += diff * (self.symbols_dict[(species, i+1)] \
-                                - self.symbols_dict[(species, i)]) / self.dz[i]
+                        f += diff * (self.symbols_dict[(species, i+1)] -
+                                     self.symbols_dict[(species, i)]) \
+                                             / self.dz[i]
                     # At the surface, account for any adsorption reactions
                     if i == 0:
                         for j, rate in enumerate(self.rates):
                             if self.is_rate_ads[j]:
-                                f += self.rate_count[j][species] * rate * self.V / self.dV[0]
-                    # If we were looking at the last grid point and the species is
-                    # fixed, discard what we just calculated
+                                f += self.rate_count[j][species] * rate * \
+                                        self.V / self.dV[0]
+                    # If we were looking at the last grid point and the species
+                    # is fixed, discard what we just calculated
                     if not (i == self.nz - 1 and species in self.fixed):
                         self.f_sym.append(f)
                 else:
@@ -763,24 +727,26 @@ class Model(object):
 
         # Fixed species must have their symbols replaced by their fixed
         # initial values. subs is a dictionary whose keys are internal species
-        # symbols and whose values are the initial concentration of that species.
+        # symbols and whose values are the initial concentration of that
+        # species.
         subs = {}
         for species in self.species:
             if species in self.fixed:
                 liquid = False
-                if self.diffusion and isinstance(species, Liquid) and species is not self.solvent:
+                if self.diffusion and isinstance(species, Liquid) \
+                        and species is not self.solvent:
                     species = (species, self.nz - 1)
                     liquid = True
                 U0i = self.U0[species]
-                if liquid or isinstance(species, (_Fluid, DummyFluid)):
+                if liquid or isinstance(species, _Fluid):
                     U0i *= self.V
-                subs[self.symbols_dict[species]] = U0i 
+                subs[self.symbols_dict[species]] = U0i
 
         # sym.sympify ensures that subs will not fail (if the expression has no
         # sympy symbols in it, this would normally fail)
         for i, f in enumerate(self.f_sym):
             self.f_sym[i] = sym.sympify(f).subs(subs)
-        
+
         # jac_sym is the SYMBOLIC Jacobian matrix, that is df/dc, where f is a
         # row of the master equation and c is a species.
         self.jac_sym = np.zeros((self.nsymbols, self.nsymbols), dtype=object)
@@ -788,10 +754,11 @@ class Model(object):
             for j, symbol in enumerate(self.symbols):
                 self.jac_sym[i, j] = sym.diff(f, symbol)
 
-        # Additionally, insert fixed species concentrations into rate expressions
+        # Additionally, insert fixed species concentrations into rate
+        # expressions
         for i, r in enumerate(self.rates):
             self.rates[i] = sym.sympify(r).subs(subs)
-        
+
         # Sets up and compiles the Fortran differential equation solving module
         self.setup_execs()
 
@@ -802,7 +769,8 @@ class Model(object):
             for species, isymbol in self.symbols_dict.items():
                 if symbol == isymbol:
                     U0i = self.U0[species]
-                    if type(species) is tuple or isinstance(species, (_Fluid, DummyFluid)):
+                    if type(species) is tuple \
+                            or isinstance(species, _Fluid):
                         U0i *= self.V
                     U0.append(U0i)
                     break
@@ -839,7 +807,7 @@ class Model(object):
             else:
                 rate_for = reaction.get_kfor(self.T, self.Asite, self.z)
                 rate_rev = reaction.get_krev(self.T, self.Asite, self.z)
-            
+
             # For adsorption reactions, scale the rate by the concentration
             # of catalytic sites (normally 1 for reactions without diffusion)
             if reaction.method in ['CT', 'ER', 'DIFF']:
@@ -850,15 +818,16 @@ class Model(object):
                 rate_rev *= self.V**(-reaction.Nprod_fluid + 1)
 
             # IMPORTANT NOTE PERTAINING TO ABOVE:
-            # As far as the user can tell, all fluids (Gas, Liquid) are represented
-            # in units of concentration (i.e. mol/L) and all adsorbates are
-            # represented in coverage (i.e. N/M, where M is the total number of sites).
-            # INTERNALLY, this is not the case. Internally, ALL species are number
-            # fractions relative to the default number of catalytic sites
-            # (though this can be changed). This means that in order to achieve
-            # detailed balance, the reaction rates must be modulated by the volume.
-            # Further sections of the code that pertain to this behavior will
-            # be highlighted with "DETAILED BALANCE NOTE"
+            # As far as the user can tell, all fluids (Gas, Liquid) are
+            # represented in units of concentration (i.e. mol/L) and all
+            # adsorbates are represented in coverage (i.e. N/M, where M is the
+            # total number of sites). INTERNALLY, this is not the case.
+            # Internally, ALL species are number fractions relative to the
+            # default number of catalytic sites (though this can be changed).
+            # This means that in order to achieve detailed balance, the
+            # reaction rates must be modulated by the volume. Further sections
+            # of the code that pertain to this behavior will be highlighted
+            # with "DETAILED BALANCE NOTE"
 
             # Initialize dictionary for reaction stiochiometry to 0 for all
             # species in the model
@@ -868,7 +837,7 @@ class Model(object):
                 if self.diffusion and isinstance(species, Liquid):
                     for i in range(self.nz):
                         rate_count[(species, i)] = 0
-            
+
             # Reactants are consumed in the forward direction
             for species in reaction.reactants:
                 # Multiply the rate by the species' symbol UNLESS it is an
@@ -877,7 +846,7 @@ class Model(object):
                 if not isinstance(species, Electron):
                     rate_for *= self.symbols_dict[species]
                 rate_count[species] -= 1
-            
+
             # Products are created in the forward direction
             for species in reaction.products:
                 if not isinstance(species, Electron):
@@ -901,7 +870,7 @@ class Model(object):
             # first layer
             if reaction.adsorption and self.diffusion:
                 rate *= self.dV[0] / self.V
-            
+
             # Append all data to global rate lists
             self.rates.append(rate)
             self.rate_count.append(rate_count)
@@ -921,29 +890,34 @@ class Model(object):
                                 new_rate_count[(species, j)] = 0
                     subs = {}
                     for species in self.species:
-                        if isinstance(species, Liquid) and species is not self.solvent:
+                        if isinstance(species, Liquid) \
+                                and species is not self.solvent:
                             new_rate_count[(species, i)] = rate_count[species]
-                            subs[self.symbols_dict[species]] = self.symbols_dict[(species, i)]
+                            subs[self.symbols_dict[species]] = \
+                                self.symbols_dict[(species, i)]
 
                     self.rates.append(rate.subs(subs))
                     self.rate_count.append(new_rate_count)
-                    self.is_rate_ads.append(reaction.adsorption) # this should always be "False"
-
+                    # This should always be False:
+                    self.is_rate_ads.append(reaction.adsorption)
 
     def setup_execs(self):
         from micki.fortran import f90_template, pyf_template
         from numpy import f2py
 
-        # y_vec is an array symbol that will represent the species concentrations
-        # provided by the differential equation solver inside the Fortran code
-        # (that is, y_vec is an INPUT to the functions that calculate the
-        # residual, Jacobian, and rate)
+        # y_vec is an array symbol that will represent the species
+        # concentrations provided by the differential equation solver inside
+        # the Fortran code (that is, y_vec is an INPUT to the functions that
+        # calculate the residual, Jacobian, and rate)
         y_vec = sym.IndexedBase('yin', shape=(self.nsymbols,))
         # Map y_vec elements (1-indexed, of course) onto 'modelparam' symbols
         trans = {self.symbols[i]: y_vec[i + 1] for i in range(self.nsymbols)}
         # Map string represntation of 'modelparam' symbols onto string
         # representation of y-vec elements
-        str_trans = {sym.fcode(self.symbols[i], source_format='free'): sym.fcode(y_vec[i + 1], source_format='free') for i in range(self.nsymbols)}
+        str_trans = {}
+        for i in range(self.nsymbols):
+            str_trans[sym.fcode(self.symbols[i], source_format='free')] = \
+                    sym.fcode(y_vec[i + 1], source_format='free')
 
         # these will contain lists of strings, with each element being one
         # Fortran assignment for the master equation, Jacobian, and
@@ -967,13 +941,14 @@ class Model(object):
             for j in range(self.nsymbols):
                 expr = self.jac_sym[j, i]
                 # Unlike the residual, some elements of the Jacobian can be 0.
-                # We don't need to bother writing 'jac(x,y) = 0' a hundred times
-                # in Fortran, so we omit those.
+                # We don't need to bother writing 'jac(x,y) = 0' a hundred
+                # times in Fortran, so we omit those.
                 if expr != 0:
                     fcode = sym.fcode(expr, source_format='free')
                     for key, val in str_trans.items():
                         fcode = fcode.replace(key, val)
-                    jaccode.append('   jac({}, {}) = '.format(j + 1, i + 1) + fcode)
+                    jaccode.append('   jac({}, {}) = '.format(j + 1, i + 1) +
+                                   fcode)
 
         # See residual above
         for i, rate in enumerate(self.rates):
@@ -986,8 +961,10 @@ class Model(object):
         # the prewritten Fortran template, including the residual, Jacobian,
         # and rate expressions we just calculated.
         program = f90_template.format(neq=self.nsymbols, nx=1,
-                nrates=len(self.rates), rescalc='\n'.join(rescode),
-                jaccalc='\n'.join(jaccode), ratecalc='\n'.join(ratecode))
+                                      nrates=len(self.rates),
+                                      rescalc='\n'.join(rescode),
+                                      jaccalc='\n'.join(jaccode),
+                                      ratecalc='\n'.join(ratecode))
 
         # Generate a randomly-named temp directory for compiling the module.
         # We will name the actual module file after the directory.
@@ -999,33 +976,41 @@ class Model(object):
         # For debugging purposes, write out the generated module
         with open('solve_ida.f90', 'w') as f:
             f.write(program)
-        
+
         # Write the pertinent data into the temp directory
         with open(os.path.join(dname, pyfname), 'w') as f:
-            f.write(pyf_template.format(modname=modname, neq=self.nsymbols, nrates=len(self.rates)))
-    
+            f.write(pyf_template.format(modname=modname, neq=self.nsymbols,
+                    nrates=len(self.rates)))
+
         # Compile the module with f2py
-        f2py.compile(program, modulename=modname, extra_args='--quiet --f90flags="-Wno-unused-dummy-argument -Wno-unused-variable -w" -lsundials_fida -lsundials_ida -lsundials_fnvecserial -lsundials_nvecserial -lmkl_rt -liomp5 ' +
-                     os.path.join(dname, pyfname), source_fn=os.path.join(dname, fname), verbose=0)
-        
+        f2py.compile(program, modulename=modname,
+                     extra_args='--quiet '
+                                '--f90flags="-Wno-unused-dummy-argument '
+                                '-Wno-unused-variable -w" -lsundials_fida '
+                                '-lsundials_ida -lsundials_fnvecserial '
+                                '-lsundials_nvecserial -lmkl_rt -liomp5 ' +
+                                os.path.join(dname, pyfname),
+                     source_fn=os.path.join(dname, fname), verbose=0)
+
         # Delete the temporary directory
         shutil.rmtree(dname)
-        
+
         # Import the module on-the-fly with __import__. This is kind of a hack.
         solve_ida = __import__(modname)
-        
+
         # The Fortran module's initialize, solve, and finalize routines
         # are mapped onto finitialize, fsolve, and ffinalize inside the Model
         # object. We don't want users touching these manually
         self.finitialize = solve_ida.initialize
         self.fsolve = solve_ida.solve
         self.ffinalize = solve_ida.finalize
-        
+
         # Delete the module file. We've already imported it, so it's in memory.
         os.remove(modname + '.so')
 
     def solve(self, t, ncp):
-        self.t, U1, dU1, r1 = self.fsolve(self.nsymbols, len(self.rates), ncp, t)
+        self.t, U1, dU1, r1 = self.fsolve(self.nsymbols,
+                                          len(self.rates), ncp, t)
         self.U1 = U1.T
         self.dU1 = dU1.T
         self.r1 = r1.T
@@ -1037,7 +1022,8 @@ class Model(object):
             dUi = {}
             ri = {}
             for species in self.fixed:
-                if self.diffusion and isinstance(species, Liquid) and species is not self.solvent:
+                if self.diffusion and isinstance(species, Liquid) \
+                        and species is not self.solvent:
                     species = (species, self.nz - 1)
                 dUi[species] = 0.
                 Ui[species] = self.U0[species]
@@ -1046,7 +1032,8 @@ class Model(object):
                     if symbol == isymbol:
                         Uij = self.U1[i][j]
                         dUij = self.dU1[i][j]
-                        if type(species) is tuple or isinstance(species, (_Fluid, DummyFluid)):
+                        if type(species) is tuple \
+                                or isinstance(species, _Fluid):
                             Uij /= self.V
                             dUij /= self.V
                         Ui[species] = Uij
@@ -1076,5 +1063,6 @@ class Model(object):
             U0 = self.U0
         else:
             U0 = None
-        return Model(self.reactions, self.T, self.Asite, self.z, self.nz, \
-                self.shape, self.steady_state, self.fixed, self.solvent, U0)
+        return Model(self.reactions, self.T, self.Asite, self.z, self.nz,
+                     self.shape, self.steady_state, self.fixed, self.solvent,
+                     U0)

@@ -20,8 +20,8 @@ class _Thermo(object):
     modeutions to the partition function from translation, rotation,
     and vibration."""
 
-    def __init__(self, dft, symm=1, spin=0., ts=False, \
-            label=None, eref=None, metal=None, dE=0., symbol=None):
+    def __init__(self, dft, symm=1, spin=0., ts=False,
+                 label=None, eref=None, metal=None, dE=0., symbol=None):
         self.T = None
 
         self.mode = ['tot', 'trans', 'trans2D', 'rot', 'vib', 'elec']
@@ -44,7 +44,6 @@ class _Thermo(object):
             db = False
             self.atoms = read(self.dft, index=0)
 
-
         self.metal = metal
         self.mass = [masses[atom.symbol] for atom in self.atoms]
         self.atoms.set_masses(self.mass)
@@ -54,7 +53,9 @@ class _Thermo(object):
             try:
                 self.freqs = np.array(self.dft.data['freqs'])
             except KeyError:
-                raise ValueError("ase.db objects must have vibrational frequencies stored as data with key 'freqs'!")
+                raise ValueError("ase.db objects must have vibrational "
+                                 "frequencies stored as data with key "
+                                 "'freqs'!")
         else:
             if 'OUTCAR' in self.dft:
                 self._read_hess_outcar()
@@ -110,7 +111,8 @@ class _Thermo(object):
 
     def get_G(self, T=None):
         self.update(T)
-        return (self.H + self.dE) * self.scale['H'] - T * self.S['tot'] * self.scale['S']['tot']
+        return (self.H + self.dE) * self.scale['H'] - \
+            T * self.S['tot'] * self.scale['S']['tot']
 
     def get_E(self, T=None):
         self.update(T)
@@ -129,16 +131,17 @@ class _Thermo(object):
     def _calc_qtrans2D(self, T, A):
         mtot = sum(self.mass) / kg
         self.q['trans2D'] = 2 * np.pi * mtot * _k * T / _hplanck**2 * A
-#        self.q['trans2D'] = 0.1 * 2 * np.pi * mtot * _k * T / _hplanck**2 / (mol * self.rho0)**(2./3.)
         self.E['trans2D'] = kB * T * self.scale['E']['trans2D']
-        self.S['trans2D'] = kB * (2. + np.log(self.q['trans2D'])) * self.scale['S']['trans2D']
+        self.S['trans2D'] = kB * (2. + np.log(self.q['trans2D'])) * \
+            self.scale['S']['trans2D']
 
     def _calc_qtrans(self, T):
         mtot = sum(self.mass) / kg
-        self.q['trans'] = 0.001 * (2 * np.pi * mtot * _k * T / _hplanck**2)**(3./2.) \
-                / (mol * self.rho0)
+        self.q['trans'] = 0.001*(2*np.pi*mtot*_k*T/_hplanck**2)**(3./2.) \
+            / (mol * self.rho0)
         self.E['trans'] = 3. * kB * T / 2. * self.scale['E']['trans']
-        self.S['trans'] = kB * (5./2. + np.log(self.q['trans'])) * self.scale['S']['trans']
+        self.S['trans'] = kB * (5./2. + np.log(self.q['trans'])) * \
+            self.scale['S']['trans']
 
     def _calc_qrot(self, T):
         com = self.atoms.get_center_of_mass()
@@ -147,27 +150,33 @@ class _Thermo(object):
             for atom in self.atoms:
                 I += atom.mass * np.linalg.norm(atom.position - com)**2
             I /= (kg * m**2)
-            self.q['rot'] = 8 * np.pi**2 * I * _k * T / (_hplanck**2 * self.symm)
+            self.q['rot'] = 8*np.pi**2*I*_k*T/(_hplanck**2*self.symm)
             self.E['rot'] = kB * T * self.scale['E']['rot']
-            self.S['rot'] = kB * (1. + np.log(self.q['rot'])) * self.scale['S']['rot']
+            self.S['rot'] = kB * (1. + np.log(self.q['rot'])) * \
+                self.scale['S']['rot']
         else:
             I = self.atoms.get_moments_of_inertia() / (kg * m**2)
             thetarot = _hplanck**2 / (8 * np.pi**2 * I * _k)
-            self.q['rot'] = np.sqrt(np.pi * T**3 / np.prod(thetarot)) / self.symm
+            self.q['rot'] = np.sqrt(np.pi*T**3/np.prod(thetarot))/self.symm
             self.E['rot'] = 3. * kB * T / 2. * self.scale['E']['rot']
-            self.S['rot'] = kB * (3./2. + np.log(self.q['rot'])) * self.scale['S']['rot']
+            self.S['rot'] = kB * (3./2. + np.log(self.q['rot'])) * \
+                self.scale['S']['rot']
 
     def _calc_qvib(self, T, ncut=0):
         thetavib = self.freqs[ncut:] / kB
-        self.q['vib'] = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
-        self.E['vib'] = kB * sum(thetavib * (1./2. + 1./(np.exp(thetavib/T) - 1.))) \
-                * self.scale['E']['vib']
-        self.S['vib'] = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) \
-                - np.log(1. - np.exp(-thetavib/T))) * self.scale['S']['vib']
+        self.q['vib'] = np.prod(np.exp(-thetavib/(2. * T)) /
+                                (1. - np.exp(-thetavib/T)))
+        self.E['vib'] = kB * sum(thetavib *
+                                 (1./2. + 1./(np.exp(thetavib/T) - 1.))) * \
+            self.scale['E']['vib']
+        self.S['vib'] = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) -
+                                 np.log(1. - np.exp(-thetavib/T))) * \
+            self.scale['S']['vib']
 
     def _calc_qelec(self, T):
         self.E['elec'] = self.potential_energy * self.scale['E']['elec']
-        self.S['elec'] = kB * np.log(2. * self.spin + 1.) * self.scale['S']['elec']
+        self.S['elec'] = kB * np.log(2. * self.spin + 1.) * \
+            self.scale['S']['elec']
 
     def _read_hess_outcar(self):
         # This reads the hessian from the OUTCAR and diagonalizes it
@@ -206,8 +215,8 @@ class _Thermo(object):
 
                     elif hessblock == 3:
                         line = line.split()
-                        hess[j] = np.array([float(val) for val in line[1:]], \
-                                dtype=float)
+                        hess[j] = np.array([float(val) for val in line[1:]],
+                                           dtype=float)
                         j += 1
 
                     elif line.startswith('SECOND DERIVATIVES'):
@@ -231,10 +240,12 @@ class _Thermo(object):
             vasp_mass[element[1].text.strip()] = float(element[2].text)
 
         selective = np.ones((len(self.atoms), 3), dtype=bool)
-        constblock = root.find('structure[@name="initialpos"]/varray[@name="selective"]')
+        constblock = root.find(
+                'structure[@name="initialpos"]/varray[@name="selective"]')
         if constblock is not None:
             for i, v in enumerate(constblock):
-                selective[i] = np.array(v.text.split() == np.array(['T', 'T', 'T']))
+                for j, fixed in enumerate(v.text.split()):
+                    selective[i, j] = (fixed == 'T')
         index = []
         for i, atom in enumerate(self.atoms):
             for direction in selective[i]:
@@ -243,7 +254,8 @@ class _Thermo(object):
 
         hess = np.zeros((len(index), len(index)), dtype=float)
 
-        for i, v in enumerate(root.find('calculation/dynmat/varray[@name="hessian"]')):
+        for i, v in enumerate(root.find(
+                'calculation/dynmat/varray[@name="hessian"]')):
             hess[i] = -np.array([float(val) for val in v.text.split()])
 
         vasp_massvec = np.zeros(len(index), dtype=float)
@@ -328,21 +340,22 @@ class _Thermo(object):
 
 class _Fluid(_Thermo):
     """Master object for both liquids and gasses"""
-    def __init__(self, dft, symm=1, spin=0., \
-            label=None, eref=None, rhoref=1., dE=0., symbol=None):
-        _Thermo.__init__(self, dft, symm, \
-                spin, False, label, eref, None, dE, symbol)
+    def __init__(self, dft, symm=1, spin=0., label=None, eref=None, rhoref=1.,
+                 dE=0., symbol=None):
+        _Thermo.__init__(self, dft, symm, spin, False, label, eref, None,
+                         dE, symbol)
         self.linear = self._is_linear()
         self.ncut = 6 - self.linear + self.ts
         self.rho0 = rhoref
-        assert np.all(self.freqs[self.ncut:] > 0), "Extra imaginary frequencies found!"
+        assert np.all(self.freqs[self.ncut:] > 0), \
+            "Extra imaginary frequencies found!"
 
     def get_reference_state(self):
         return self.rho0
 
     def copy(self):
-        return self.__class__(self.dft, self.symm, self.spin, \
-                self.label, self.eref)
+        return self.__class__(self.dft, self.symm, self.spin,
+                              self.label, self.eref)
 
     def _calc_q(self, T):
         self._calc_qelec(T)
@@ -350,10 +363,12 @@ class _Fluid(_Thermo):
         self._calc_qrot(T)
         self._calc_qvib(T, ncut=self.ncut)
         self.q['tot'] = self.q['trans'] * self.q['rot'] * self.q['vib']
-        self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + self.E['vib']
-        #self.E['tot'] = self.E['elec'] + sum(self.freqs[self.ncut:])/2.
-        self.H = self.E['tot'] #+ kB * T
-        self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + self.S['vib']
+        self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + \
+            self.E['vib']
+        self.H = self.E['tot']
+        self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + \
+            self.S['vib']
+
 
 class Electron(_Thermo):
     def __init__(self, E, symbol, label=''):
@@ -404,25 +419,28 @@ class Gas(_Fluid):
 
 
 class Liquid(_Fluid):
-    def __init__(self, dft, symm=1, spin=0., \
-            label=None, eref=None, rhoref=1., dE=0., symbol=None, S=None, D=None):
+    def __init__(self, dft, symm=1, spin=0., label=None, eref=None, rhoref=1.,
+                 dE=0., symbol=None, S=None, D=None):
         _Fluid.__init__(self, dft, symm, spin, label, eref, rhoref, dE, symbol)
         self.Sliq = S
         self.D = D
 
     def _calc_q(self, T):
         _Fluid._calc_q(self, T)
-        #self.S['tot'] += kB * np.log(kB * T * mol / (100 * Pascal * m**3)) - 8.7291e-4
-        #self.S['tot'] -= 8.729051950576513e-4
-        self.S['tot'] = self.Sliq
+        if self.Sliq is None:
+            # Use Trouton's Rule
+            self.S['tot'] -= (4.5 + np.log(T)) * J / mol
+        else:
+            self.S['tot'] = self.Sliq
 
 
 class Adsorbate(_Thermo):
-    def __init__(self, dft, spin=0., ts=False, label=None, \
-            eref=None, metal=None, dE=0., symbol=None, sites=None):
-        _Thermo.__init__(self, dft, 1, \
-                spin, ts, label, eref, metal, dE, symbol)
-        assert np.all(self.freqs[1 if ts else 0:] > 0), "Imaginary frequencies found!"
+    def __init__(self, dft, spin=0., ts=False, label=None, eref=None,
+                 metal=None, dE=0., symbol=None, sites=None):
+        _Thermo.__init__(self, dft, 1, spin, ts, label, eref, metal,
+                         dE, symbol)
+        assert np.all(self.freqs[1 if ts else 0:] > 0), \
+            "Imaginary frequencies found!"
 
         if isinstance(sites, Adsorbate):
             self.sites = [sites]
@@ -437,143 +455,18 @@ class Adsorbate(_Thermo):
         self._calc_qelec(T)
         self.q['tot'] = self.q['vib']
         self.E['tot'] = self.E['elec'] + self.E['vib']
-        #self.E['tot'] = self.E['elec'] + sum(self.freqs[1 if self.ts else 0:])/2.
-        self.H = self.E['tot'] #+ kB * T
+        self.H = self.E['tot']
         self.S['tot'] = self.S['elec'] + self.S['vib']
 
     def copy(self):
-        return self.__class__(self.dft, self.spin, self.ts, \
-                self.label, self.eref, self.metal)
-
-class _DummyThermo(_Thermo):
-    def __init__(self, linear, symm, spin, ts, freqs, label, E, rhoref):
-        self.T = None
-        self.potential_energy = E
-        self.linear = linear
-        self.symm = symm
-        self.spin = spin
-        self.ts = ts
-        self.label = label
-        self.freqs = np.array(freqs) * _hplanck * 100 * J * _c
-        self.rho0 = rhoref
-        self.scale_old = self.scale.copy()
-        self.dE = 0
-
-    def _calc_qvib(self, T, ncut=0):
-        self.E['vib'] = sum(self.freqs[ncut:])/2. * self.scale['E']['vib']
-        thetavib = self.freqs[ncut:] / kB
-        x = self.freqs[ncut:] / (kB * T)
-        self.S['vib'] = kB * np.sum(x / (np.exp(x) - 1) - np.log(1-np.exp(-x))) * self.scale['S']['vib']
-
-#        self.q['vib'] = np.prod(np.exp(-thetavib/(2. * T)) / (1. - np.exp(-thetavib/T)))
-#        self.S['vib'] = kB * sum((thetavib/T)/(np.exp(thetavib/T) - 1.) \
-#                - np.log(1. - np.exp(-thetavib/T))) * self.scale['S']['vib']
-
-    def get_reference_state(self):
-        return self.rho0
-
-class DummyFluid(_DummyThermo):
-    def __init__(self, geometry, linear=False, symm=1, spin=0., ts=False, \
-            freqs=[], label=None, E=0., rhoref=1., Stot=None, monatomic=False,
-            H=None):
-        self.geometry = geometry
-        self.atoms = read(geometry)
-        self.mass = [masses[atom.symbol] for atom in self.atoms]
-        self.atoms.set_masses(self.mass)
-        self.Stot_in = Stot
-        if self.Stot_in is not None:
-            self.Stot_in *= J / _Nav
-        self.monatomic = monatomic
-        self.H_in = H
-        _DummyThermo.__init__(self, linear, symm, spin, ts, freqs, label, E, rhoref)
-        if self.linear and len(self.freqs) < 3 * len(self.atoms) - 5:
-            for i in range(3 * len(self.atoms) - 5 - len(self.freqs)):
-                self.freqs = np.append(self.freqs, 200 * _hplanck * 100 * J * _c)
-        elif not self.linear and len(self.freqs) < 3 * len(self.atoms) - 6:
-            for i in range(3 * len(self.atoms) - 6 - len(self.freqs)):
-                self.freqs = np.append(self.freqs, 200 * _hplanck * 100 * J * _c)
-
-    def copy(self):
-        return self.__class__(self.geometry, self.linear, self.symm, self.spin, \
-                self.ts, self.freqs, self.label, self.potential_energy, self.rho0)
-
-    def _calc_q(self, T):
-        self._calc_qelec(T)
-        if len(self.atoms) > 0:
-            self._calc_qtrans(T)
-        else:
-            self.S['trans'] = 0
-            self.E['trans'] = 0
-        if self.monatomic:
-            self.E['rot'] = 0
-            self.E['vib'] = 0
-            self.S['rot'] = 0
-            self.S['vib'] = 0
-        else:
-            self._calc_qrot(T)
-            self._calc_qvib(T)
-        self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + self.E['vib']
-        if self.H_in is not None:
-            self.H = self.H_in
-        else:
-            self.H = self.E['tot'] + kB * T
-        self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + self.S['vib']
-
-
-class DummyAdsorbate(_DummyThermo):
-    def __init__(self, label, spin=0., ts=False, freqs=[], E=0, \
-            dE=0., gas=None, Floc=1., natoms=None, ZPE=None):
-        _DummyThermo.__init__(self, False, 1, spin, ts, freqs, label, E, 1.)
-        self.dE = dE
-        self.gas = gas
-        if self.gas is not None:
-            self.atoms = self.gas.atoms
-        self.Floc = Floc
-        self.natoms = natoms
-        self.ZPE = ZPE
-#        if self.ts and len(self.freqs) < 3 * self.natoms - 1:
-#            for i in range(3 * self.natoms - 1 - len(self.freqs)):
-#                self.freqs = np.append(self.freqs, 200 * _hplanck * 100 * J * _c)
-#        elif not self.ts and len(self.freqs) < 3 * self.natoms:
-#            for i in range(3 * self.natoms - len(self.freqs)):
-#                self.freqs = np.append(self.freqs, 200 * _hplanck * 100 * J * _c)
-
-    def _calc_q(self, T):
-        self._calc_qvib(T)
-        self._calc_qelec(T)
-        if self.gas is not None:
-            self.gas._calc_q(T)
-            if self.ZPE is not None:
-                self.gas.E['vib'] = self.E['vib'] - self.ZPE
-            if self.gas.Stot_in is not None:
-                self.Stot_gas = self.gas.Stot_in
-            else:
-                self.Stot_gas = (self.gas.S['trans'] + self.gas.S['rot']
-                        + self.gas.S['vib'] + self.gas.S['elec'])
-        self.E['tot'] = self.E['elec'] + self.E['vib']
-        self.H = self.E['tot'] + kB * T
-        if self.gas is not None:
-            self.H -= self.gas.Evib
-        self.S['tot'] = self.S['elec'] + self.S['vib']
-
-    def get_S_gas(self, T):
-        assert self.gas is not None
-        self.update(T)
-        return self.Floc * (self.Stot_gas - self.gas.S['trans'])
-
-    def get_dZPE(self, T):
-        self.gas.update(T)
-        self.update(T)
-        return self.E['vib'] - self.gas.E['vib']
-
-    def copy(self):
-        return self.__class__(self.label, self.spin, self.ts, \
-                self.freqs, self.potential_energy)
+        return self.__class__(self.dft, self.spin, self.ts,
+                              self.label, self.eref, self.metal)
 
 
 class Shomate(_Thermo):
     def __init__(self):
         raise NotImplementedError
+
 
 class _Reactants(object):
     def __init__(self, species):
@@ -601,8 +494,6 @@ class _Reactants(object):
                             self.elements[symbol] += other.elements[symbol]
                         else:
                             self.elements[symbol] = other.elements[symbol]
-                elif isinstance(other, DummyAdsorbate):
-                    pass
                 else:
                     for symbol in other.atoms.get_chemical_symbols():
                         if symbol in self.elements:
@@ -653,7 +544,10 @@ class _Reactants(object):
         return self.__class__(self.species)
 
     def get_mass(self):
-        return sum([species.atoms.get_masses().sum() for species in self.species])
+        mtot = 0
+        for species in self.species:
+            mtot += species.atoms.get_masses().sum()
+        return mtot
 
     def __iadd__(self, other):
         if isinstance(other, _Reactants):

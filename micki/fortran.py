@@ -1,4 +1,4 @@
-f90_template="""module solve_ida
+f90_template = """module solve_ida
 
    implicit none
 
@@ -273,7 +273,7 @@ end subroutine fidapset
 pyf_template = """!    -*- f90 -*-
 ! Note: the context of this file is case sensitive.
 
-python module {modname} ! in 
+python module {modname} ! in
     interface  ! in :{modname}
         module solve_ida ! in :{modname}:{modname}.f90
             real*8 dimension({neq}) :: yp0
@@ -308,7 +308,7 @@ python module {modname} ! in
         subroutine finalize ! in :{modname}:{modname}.f90
             use solve_ida, only: mas,y0,yp0,diff
         end subroutine finalize
-    end interface 
+    end interface
 end python module {modname}
 
 ! This file was auto-generated with f2py (version:2).
