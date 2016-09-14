@@ -6,7 +6,6 @@ import os
 import tempfile
 import shutil
 import warnings
-import time
 
 import numpy as np
 import sympy as sym
@@ -317,6 +316,7 @@ class Reaction(object):
             dS = (fluid.S['trans2D'] - fluid.S['trans']) * Slost
             dG = fluid.E['trans2D'] - fluid.E['trans'] - T * dS
             self.kfor = barr * _k * T / _hplanck * np.exp(-dG / (kB * T))
+            self.kfor *= self.scale['kfor']
         elif self.method == 'ER':
             # Collision Theory
             # kfor = S0 * Asite / (sqrt(2 * pi * m * kB * T))
@@ -633,7 +633,6 @@ class Model(object):
                         if not (j == self.nz - 1 and species in self.fixed):
                             self.symbols.append(self.symbols_all[i])
                         i += 1
-                # I don't remember what this is for, so I'm removing it for now
                 else:
                     # I don't remember what this is for,
                     # so I'm removing it for now

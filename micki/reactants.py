@@ -429,7 +429,7 @@ class Liquid(_Fluid):
         _Fluid._calc_q(self, T)
         if self.Sliq is None:
             # Use Trouton's Rule
-            self.S['tot'] -= (4.5 + np.log(T)) * J / mol
+            self.S['tot'] -= (4.5 + np.log(T)) * kB
         else:
             self.S['tot'] = self.Sliq
 
