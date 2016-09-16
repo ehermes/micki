@@ -739,7 +739,6 @@ class Model(object):
         unknown_symbols -= known_symbols
         unknown_symbols -= set(self.symbols_all)
         subs.update({symbol: 0 for symbol in unknown_symbols})
-        print(unknown_symbols)
 
         # Fixed species must have their symbols replaced by their fixed
         # initial values.
