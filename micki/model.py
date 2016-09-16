@@ -216,9 +216,8 @@ class Reaction(object):
                 dG_act = self.dG_act
                 if isinstance(dG_act, sym.Basic):
                     subs = {}
-                    for atom in dG_act.atoms():
-                        if isinstance(atom, sym.Symbol):
-                            subs[atom] = 0.
+                    for atom in dG_act.atoms(sym.Symbol):
+                        subs[atom] = 0.
                     dG_act = dG_act.subs(subs)
 
                 if dG_act < 0.:
@@ -230,9 +229,8 @@ class Reaction(object):
                 dG_rev = self.dG_act - self.dG
                 if isinstance(dG_rev, sym.Basic):
                     subs = {}
-                    for atom in dG_rev.atoms():
-                        if isinstance(atom, sym.Symbol):
-                            subs[atom] = 0.
+                    for atom in dG_rev.atoms(sym.Symbol):
+                        subs[atom] = 0.
                     dG_rev = dG_rev.subs(subs)
 
                 if dG_rev < 0.:
@@ -290,9 +288,8 @@ class Reaction(object):
             self.kfor = _k * T * barr / _hplanck * self.scale['kfor']
             if isinstance(self.keq, sym.Basic):
                 subs = {}
-                for atom in self.keq.atoms():
-                    if isinstance(atom, sym.Symbol):
-                        subs[atom] = 0.
+                for atom in self.keq.atoms(sym.Symbol):
+                    subs[atom] = 0.
                 keq = self.keq.subs(subs)
             else:
                 keq = self.keq
@@ -650,8 +647,13 @@ class Model(object):
         # trans_cov_symbols converts the species assigned symbol
         # (species.symbol) to the model's internal symbol for that species
         self.trans_cov_symbols = {}
+        # known_symbols keeps track of user-provided symbols that the
+        # model has seen, so that symbols referring to species not in
+        # the model can be later removed.
+        known_symbols = set()
         for species in self.species:
             if species.symbol is not None:
+                known_symbols.add(species.symbol)
                 self.trans_cov_symbols[species.symbol] = \
                         self.symbols_dict[species]
 
@@ -724,11 +726,23 @@ class Model(object):
             else:
                 assert f == 0, "Fixed species rate of change not zero!"
 
-        # Fixed species must have their symbols replaced by their fixed
-        # initial values. subs is a dictionary whose keys are internal species
-        # symbols and whose values are the initial concentration of that
-        # species.
+        # subs is a dictionary whose keys are internal species symbols and
+        # whose values are the initial concentrations of that species if it
+        # is known, or 0 otherwise.
         subs = {}
+
+        # All symbols referring to unknown species are going to be replaced
+        # by 0
+        unknown_symbols = set()
+        for f in self.f_sym:
+            unknown_symbols.update(f.atoms(sym.Symbol))
+        unknown_symbols -= known_symbols
+        unknown_symbols -= set(self.symbols_all)
+        subs.update({symbol: 0 for symbol in unknown_symbols})
+        print(unknown_symbols)
+
+        # Fixed species must have their symbols replaced by their fixed
+        # initial values.
         for species in self.species:
             if species in self.fixed:
                 liquid = False
