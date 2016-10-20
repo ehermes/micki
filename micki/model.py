@@ -384,6 +384,7 @@ class Model(object):
         self.species = []
         self.vacancy = []
         self.vacspecies = {}
+        self.lattice = None
         for reaction in reactions:
             assert isinstance(reaction, Reaction)
             self.reactions.append(reaction)
@@ -472,9 +473,13 @@ class Model(object):
 
     def add_species(self, species):
         assert isinstance(species, _Thermo)
+        # Do nothing if we already know about the species
         if species in self.species:
             return
+        # Add the species to the list of known species
         self.species.append(species)
+        # Add the sites that species occupies to the list of known
+        # species. Make sure those sites are vacancies.
         if species.sites is not None:
             for site in species.sites:
                 if site not in self.vacancy:
@@ -483,6 +488,14 @@ class Model(object):
                     self.vacspecies[site] = [species]
                 else:
                     self.vacspecies[site].append(species)
+        # If the species has a defined lattice, use that lattice for
+        # the model.
+        if species.lattice is not None:
+            if self.lattice is None:
+                self.lattice = species.lattice
+            # No two species can have different lattices in the model.
+            elif self.lattice is not species.lattice:
+                raise ValueError("Only one type of lattice allowed per model!")
 
     def set_temperature(self, T):
         self.T = T
@@ -552,17 +565,25 @@ class Model(object):
         self.vactot = {}
         # Determine what the initial vacancy concentration should be
         for species in self.vacancy:
-            # The site with the highest concentration is normalized to one,
-            # so no site should have an occupancy of over 1
-            assert occsites[species] <= 1., \
-                    "Too many adsorbates on {}!".format(species)
-            # If we didn't also specify an initial vacancy concentration,
-            # assume it is 1
-            if species not in U0:
-                self.vactot[species] = 1.
-                U0[species] = 1. - occsites[species]
+            # If a vacancy species is part of the lattice, get its maximum
+            # concentration from its relative abundance. Otherwise, assume
+            # it is 1.
+            if self.lattice is not None and species in self.lattice.sites:
+                self.vactot[species] = self.lattice.ratio[species]
             else:
-                self.vactot[species] = U0[species] + occsites[species]
+                self.vactot[species] = 1.
+            # Make sure there isn't too much stuff occupying each kind of
+            # site on the surface.
+            assert occsites[species] <= self.vactot[species], \
+                    "Too many adsorbates on {}!".format(species)
+            # Normalize the concentration of empty sites to match the
+            # appropriate site ratio from the lattice.
+            U0[species] = self.vactot[species] - occsites[species]
+#            if species not in U0:
+#                self.vactot[species] = 1.
+#                U0[species] = 1. - occsites[species]
+#            else:
+#                self.vactot[species] = U0[species] + occsites[species]
 
         # Populate dictionary of initial conditions for all species
         for species in self.species:

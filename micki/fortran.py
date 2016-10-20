@@ -92,7 +92,6 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    integer, intent(in) :: neqin, nt, nrates
    real*8, intent(in) :: tfinal
 
-   real*8 :: yp(neqin)
    real*8 :: rpar(1)
    integer :: ipar(1)
 
@@ -103,8 +102,6 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    real*8 :: dt, tout
    integer :: itask, ier
    integer :: i
-
-   yp = 0.d0
 
    itask = 1
    dt = tfinal / (nt - 1)
@@ -118,8 +115,11 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
 
    do i = 2, nt
       tout = tout + dt
-      call fidasolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
-!      call fidaresfun(t1(i), u1(:, i), yp, du1(:, i), ipar, rpar, ier)
+      do while (tout - t1(i) > dt * 0.01)
+         call fidasolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
+         print *, "Target time:", tout
+         print *, "Actual time:", t1(i)
+      end do
       call ratecalc({neq}, {nrates}, u1(:, i), r1(:, i))
    end do
 

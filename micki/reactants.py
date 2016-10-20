@@ -77,6 +77,7 @@ class _Thermo(object):
 
         self.symbol = symbol
         self.sites = None
+        self.lattice = None
 
     def update(self, T=None):
         """Updates the object's thermodynamic properties"""
@@ -403,6 +404,7 @@ class Electron(_Thermo):
         self.symbol = symbol
 
         self.label = label
+        self.lattice = None
 
     def get_reference_state(self):
         return 1.
@@ -436,7 +438,7 @@ class Liquid(_Fluid):
 
 class Adsorbate(_Thermo):
     def __init__(self, dft, spin=0., ts=False, label=None, eref=None,
-                 metal=None, dE=0., symbol=None, sites=None):
+                 metal=None, dE=0., symbol=None, sites=None, lattice=None):
         _Thermo.__init__(self, dft, 1, spin, ts, label, eref, metal,
                          dE, symbol)
         assert np.all(self.freqs[1 if ts else 0:] > 0), \
@@ -446,6 +448,7 @@ class Adsorbate(_Thermo):
             self.sites = [sites]
         else:
             self.sites = sites
+        self.lattice = lattice
 
     def get_reference_state(self):
         return 1.
@@ -457,6 +460,8 @@ class Adsorbate(_Thermo):
         self.E['tot'] = self.E['elec'] + self.E['vib']
         self.H = self.E['tot']
         self.S['tot'] = self.S['elec'] + self.S['vib']
+        if self.lattice is not None:
+            self.S['tot'] += self.lattice.get_S_conf(self.sites)
 
     def copy(self):
         return self.__class__(self.dft, self.spin, self.ts,
