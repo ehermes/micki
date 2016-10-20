@@ -377,8 +377,8 @@ class Reaction(object):
 
 class Model(object):
     def __init__(self, reactions, T, Asite, z=None, nz=1,
-                 shape='FLAT', steady_state=[], fixed=[], solvent=None,
-                 U0=None):
+                 shape='FLAT', fixed=[], solvent=None,
+                 U0=None, steady_state=None):
         # Set up list of reactions and species
         self.reactions = []
         self.species = []
@@ -391,8 +391,11 @@ class Model(object):
             for species in reaction.species:
                 self.add_species(species)
 
-        # Load in steady-state approximated species
-        self.steady_state = steady_state
+        # Remove all vacancies from the list of species
+        for vacancy in self.vacancy:
+            if vacancy in self.species:
+                self.species.remove(vacancy)
+
         # Solvent will not diffuse even in diffusion system
         self.solvent = solvent
         # Fixed species are removed from the differential equations
@@ -439,24 +442,16 @@ class Model(object):
                 if self.diffusion:
                     assert species.D is not None, \
                         "Specify diffusion constant for {}".format(species)
-                    assert species not in self.steady_state, \
-                        "Can't have Liquid in steady state with diffusion!"
-                if species not in self.steady_state:
-                    newspecies.append(species)
+                newspecies.append(species)
                 self.nliquid += 1
         for species in self.species:
             if isinstance(species, (Gas, Electron)):
-                if species not in self.steady_state:
-                    newspecies.append(species)
+                newspecies.append(species)
         for species in self.species:
             if isinstance(species, Adsorbate):
-                if species not in self.steady_state \
-                        and species not in self.vacancy:
-                    newspecies.append(species)
-        for species in self.steady_state:
-            newspecies.append(species)
-        for species in self.vacancy:
-            newspecies.append(species)
+                newspecies.append(species)
+#        for species in self.vacancy:
+#            newspecies.append(species)
         self.species = newspecies
 
         # Set up diffusion grid, if necessary
@@ -478,12 +473,10 @@ class Model(object):
             return
         # Add the species to the list of known species
         self.species.append(species)
-        # Add the sites that species occupies to the list of known
-        # species. Make sure those sites are vacancies.
+        # Add the sites that species occupies to the list of known vacancies.
         if species.sites is not None:
             for site in species.sites:
                 if site not in self.vacancy:
-                    self.add_species(site)
                     self.vacancy.append(site)
                     self.vacspecies[site] = [species]
                 else:
@@ -538,6 +531,12 @@ class Model(object):
         occsites = {species: 0 for species in self.vacancy}
 
         for species in self.U0:
+            # Ignore all initial conditions for the number of empty sites
+            if species in self.vacancy:
+                warnings.warn('Initial condition for vacancy concentration '
+                              'ignored.', RuntimeWarning, stacklevel=2)
+                continue
+
             # Tuple implies we're talking about a diffusive liquid species
             if type(species) is tuple:
                 species = species[0]
@@ -616,15 +615,6 @@ class Model(object):
         # Initialize "mass matrix", which is a diagonal matrix with 1s for
         # differential elements and 0s for algebraic elements (steady-state)
         M = np.ones(size, dtype=int)
-        i = 0
-        for species in self.species:
-            if self.diffusion and isinstance(species, Liquid) \
-                    and species is not self.solvent:
-                i += self.nz
-            else:
-                if species in self.steady_state or species in self.vacancy:
-                    M[i] = 0
-                i += 1
 
         # This creates a symbol for each species named modelparamX where X
         # is a three-digit numerical identifier that corresponds to its
@@ -663,6 +653,14 @@ class Model(object):
                     self.symbols.append(self.symbols_all[i])
                 i += 1
 
+        # A vacancy will be represented by the total number of sites
+        # minus the symbol of each species that occupies one of its sites.
+        for vacancy in self.vacancy:
+            vacsymbols = self.vactot[vacancy]
+            for species in self.vacspecies[vacancy]:
+                vacsymbols -= self.symbols_dict[species]
+            self.symbols_dict[vacancy] = vacsymbols
+
         # nsymbols is the size of the differential equations
         self.nsymbols = len(self.symbols)
         # trans_cov_symbols converts the species assigned symbol
@@ -677,6 +675,11 @@ class Model(object):
                 known_symbols.add(species.symbol)
                 self.trans_cov_symbols[species.symbol] = \
                         self.symbols_dict[species]
+        for vacancy in self.vacancy:
+            if vacancy.symbol is not None:
+                known_symbols.add(vacancy.symbol)
+                self.trans_cov_symbols[vacancy.symbol] = \
+                        self.symbols_dict[vacancy]
 
         # Create the final mass matrix of the proper dimensions
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
@@ -735,12 +738,6 @@ class Model(object):
                 # Reactions involving on-surface species
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
-            elif species in self.vacancy:
-                # Vacancies are algebraic, we ensure here that the number
-                # of a given type of adsorption site does not change over time
-                f = self.vactot[species] - self.symbols_dict[species]
-                for a in self.vacspecies[species]:
-                    f -= self.symbols_dict[a]
             # Discard rates for fixed species
             if species not in self.fixed:
                 self.f_sym.append(f)
@@ -870,6 +867,8 @@ class Model(object):
                 if self.diffusion and isinstance(species, Liquid):
                     for i in range(self.nz):
                         rate_count[(species, i)] = 0
+            for vacancy in self.vacancy:
+                rate_count[vacancy] = 0
 
             # Reactants are consumed in the forward direction
             for species in reaction.reactants:
@@ -1019,8 +1018,8 @@ class Model(object):
         f2py.compile(program, modulename=modname,
                      extra_args='--quiet '
                                 '--f90flags="-Wno-unused-dummy-argument '
-                                '-Wno-unused-variable -w" -lsundials_fida '
-                                '-lsundials_ida -lsundials_fnvecserial '
+                                '-Wno-unused-variable -w" -lsundials_fcvode '
+                                '-lsundials_cvode -lsundials_fnvecserial '
                                 '-lsundials_nvecserial -lmkl_rt -liomp5 ' +
                                 os.path.join(dname, pyfname),
                      source_fn=os.path.join(dname, fname), verbose=0)
@@ -1071,6 +1070,11 @@ class Model(object):
                             dUij /= self.V
                         Ui[species] = Uij
                         dUi[species] = dUij
+            for vacancy in self.vacancy:
+                Ui[vacancy] = self.vactot[vacancy]
+                for species in self.vacspecies[vacancy]:
+                    Ui[vacancy] -= Ui[species]
+                dUi[vacancy] = 0
 
             j = 0
             for reaction in self.reactions:
@@ -1097,5 +1101,5 @@ class Model(object):
         else:
             U0 = None
         return Model(self.reactions, self.T, self.Asite, self.z, self.nz,
-                     self.shape, self.steady_state, self.fixed, self.solvent,
+                     self.shape, self.fixed, self.solvent,
                      U0)

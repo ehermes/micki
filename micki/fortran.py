@@ -3,8 +3,8 @@ f90_template = """module solve_ida
    implicit none
 
    integer :: neq = {neq}
-   integer :: iout(25)
-   real*8 :: rout(10)
+   integer :: iout(21)
+   real*8 :: rout(6)
    real*8 :: y0({neq}), yp0({neq})
    real*8 :: diff({neq}), mas({neq}, {neq})
    real*8 :: jac({neq}, {neq})
@@ -25,6 +25,7 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    real*8 :: t0, yptmp(neqin)
    integer :: nthreads, iatol, ier
    integer :: i
+   integer :: meth, itmeth
    integer, external :: OMP_GET_NUM_THREADS
 
    iatol = 2
@@ -37,49 +38,53 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    diff = id_vec
    mas = 0
    t0 = 0
+   meth = 2  ! 1 = Adams (nonstiff), 2 = BDF (stiff)
+   itmeth = 2  ! 1 = functional iteration, 2 = Newton iteration
 
-   do i = 1, neq
-      mas(i, i) = id_vec(i)
-   enddo
+!   do i = 1, neq
+!      mas(i, i) = id_vec(i)
+!   enddo
 
-   ! Calculate yp
-   call fidaresfun(0.d0, y0, yptmp, yp0, ipar, rpar, ier)
+!   ! Calculate yp
+!   call fcvfun(0.d0, y0, yp0, ipar, rpar, ier)
+
    ! initialize Sundials
-   call fnvinits(2, neq, ier)
+   call fnvinits(1, neq, ier)
    !call fnvinitomp(2, neq, nthreads, ier)
    ! allocate memory
-   call fidamalloc(t0, y0, yp0, iatol, rtol, atol, iout, &
-                   rout, ipar, rpar, ier)
+   call fcvmalloc(t0, y0, meth, itmeth, iatol, rtol, atol, iout, rout, &
+                  ipar, rpar, ier)
+! TODO: Fix all of these settings
    ! set maximum number of steps (default = 500)
-   call fidasetiin('MAX_NSTEPS', 500000, ier)
+   call fcvsetiin('MAX_NSTEPS', 50000, ier)
 !   ! set maximum number of nonlinear iterations (default = 4)
-!   call fidasetiin('MAX_NITERS', 2, ier)
-!   ! set maximum number of error test failures (default = 10)
-!   call fidasetiin('MAX_ERRFAILS', 50, ier)
-!   ! set maximum number of convergence failures (default = 10)
-!   call fidasetiin('MAX_CONVFAIL', 50, ier)
-   ! set maximum order for LMM method (default = 5)
-   call fidasetiin('MAX_ORD', 2, ier)
-!   ! set nonlinear convergence test coefficient (default = 0.33)
-!   call fidasetrin('NLCONV_COEF', 0.67d0, ier)
-   ! set initial step size
-   call fidasetrin('INIT_STEP', 1d-17, ier)
-   ! set algebraic variables
-   call fidasetvin('ID_VEC', id_vec, ier)
-   ! set constraints (all yi >= 0.)
-   call fidasetvin('CONSTR_VEC', constr_vec, ier)
+!!   call fcvsetiin('MAX_NITERS', 2, ier)
+!!   ! set maximum number of error test failures (default = 10)
+!!   call fcvsetiin('MAX_ERRFAILS', 50, ier)
+!!   ! set maximum number of convergence failures (default = 10)
+!!   call fcvsetiin('MAX_CONVFAIL', 50, ier)
+!   ! set maximum order for LMM method (default = 5)
+!   call fcvsetiin('MAX_ORD', 2, ier)
+!!   ! set nonlinear convergence test coefficient (default = 0.33)
+!!   call fcvsetrin('NLCONV_COEF', 0.67d0, ier)
+!   ! set initial step size
+!   call fcvsetrin('INIT_STEP', 1d-17, ier)
+!   ! set algebraic variables
+!   call fcvsetvin('ID_VEC', id_vec, ier)
+!   ! set constraints (all yi >= 0.)
+!   call fcvsetvin('CONSTR_VEC', constr_vec, ier)
    ! initialize the solver
-   call fidalapackdense(neq, ier)
+   call fcvdense(neq, ier)
    ! enable the jacobian
-   call fidalapackdensesetjac(1, ier)
+   call fcvdensesetjac(1, ier)
 !   ! initialize the solver
-!!   call fidaspgmr(0, 0, 0, 0, 0, ier)
-!!   call fidaspbcg(0, 0, 0, ier)
-!   call fidasptfqmr(0, 0, 0, ier)
+!!   call fcvspgmr(2, 2, 0, 0, ier)
+!!   call fcvspbcg(0, 0, 0, ier)
+!   call fcvsptfqmr(0, 0, 0, ier)
 !   ! enable the jacobian
-!   call fidaspilssetjac(1, ier)
+!   call fcvspilssetjac(1, ier)
 !   ! enable the preconditioner
-!   call fidaspilssetprec(1, ier)
+!   call fcvspilssetprec(1, ier)
 
 end subroutine initialize
 
@@ -116,10 +121,12 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    do i = 2, nt
       tout = tout + dt
       do while (tout - t1(i) > dt * 0.01)
-         call fidasolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
+         call fcvode(tout, t1(i), u1(:, i), itask, ier)
+!         call fcvsolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
          print *, "Target time:", tout
          print *, "Actual time:", t1(i)
       end do
+      call fcvfun(t1(i), u1(:, i), du1(:, i), ipar, rpar, ier)
       call ratecalc({neq}, {nrates}, u1(:, i), r1(:, i))
    end do
 
@@ -131,20 +138,20 @@ subroutine finalize
 
    implicit none
 
-   call fidafree
+   call fcvfree
 
 end subroutine finalize
 
-subroutine fidaresfun(tres, yin, ypin, res, ipar, rpar, reserr)
+subroutine fcvfun(tres, yin, res, ipar, rpar, reserr)
 
-   use solve_ida, only: neq, diff
+   use solve_ida, only: neq
 
    implicit none
 
    integer, intent(in) :: ipar(*)
    integer, intent(out) :: reserr
    real*8, intent(in) :: tres, rpar(*)
-   real*8, intent(in) :: yin(neq), ypin(neq)
+   real*8, intent(in) :: yin(neq)
    real*8, intent(out) :: res(neq)
    real*8 :: x({nx})
 
@@ -152,32 +159,28 @@ subroutine fidaresfun(tres, yin, ypin, res, ipar, rpar, reserr)
 
 {rescalc}
 
-   res = res - diff * ypin
    reserr = 0
 
-end subroutine fidaresfun
+end subroutine fcvfun
 
-subroutine fidadjac(neqin, t, yin, ypin, r, jac, cj, ewt, h, &
+subroutine fcvdjac(neqin, t, yin, ypin, jac, h, &
                     ipar, rpar, wk1, wk2, wk3, djacerr)
-
-use solve_ida, only: mas
 
    implicit none
 
    integer :: neqin, ipar(*)
    integer :: djacerr
-   real*8 :: t, h, cj, rpar(*)
-   real*8 :: yin(neqin), ypin(neqin), r(neqin), ewt(*), jac(neqin, neqin)
+   real*8 :: t, h, rpar(*)
+   real*8 :: yin(neqin), ypin(neqin), jac(neqin, neqin)
    real*8 :: wk1(*), wk2(*), wk3(*)
 
    jac = 0
 
 {jaccalc}
 
-   jac = jac - cj * mas
    djacerr = 0
 
-end subroutine fidadjac
+end subroutine fcvdjac
 
 subroutine ratecalc(neqin, nrates, yin, rates)
 
@@ -193,14 +196,14 @@ subroutine ratecalc(neqin, nrates, yin, rates)
 
 end subroutine ratecalc
 
-subroutine fidajtimes(tres, yin, ypin, res, vin, fjv, cj, ewt, h, ipar, rpar, wk1, wk2, ier)
+subroutine fcvjtimes(vin, fjv, tres, yin, res, h, ipar, rpar, wk1, ier)
 
    use solve_ida, only: neq, jac
 
    implicit none
 
-   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq), vin(neq), cj, h
-   real*8 :: ewt(*), wk1(*), wk2(*), rpar(*)
+   real*8, intent(in) :: tres, yin(neq), res(neq), vin(neq), h
+   real*8 :: wk1(*), rpar(*)
    integer :: ipar(*)
    integer :: i
 
@@ -209,7 +212,7 @@ subroutine fidajtimes(tres, yin, ypin, res, vin, fjv, cj, ewt, h, ipar, rpar, wk
 
 !   real*8 :: jac(neq, neq)
 !
-!   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
+!   call fcvdjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
 !                    ipar, rpar, wk1, wk2, wk2, ier)
 
    do i = 1, neq
@@ -218,54 +221,61 @@ subroutine fidajtimes(tres, yin, ypin, res, vin, fjv, cj, ewt, h, ipar, rpar, wk
 
    ier = 0
 
-end subroutine fidajtimes
+end subroutine fcvjtimes
 
-subroutine fidapsol(tres, yin, ypin, res, rvin, zv, cj, delta, ewt, ipar, rpar, wk1, ier)
+subroutine fcvpsol(tres, yin, res, rvin, zv, cj, delta, lr, ipar, rpar, wk1, ier)
 
    use solve_ida, only: neq, jac
 
    implicit none
 
-   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq), rvin(neq)
-   real*8, intent(in) :: cj, delta, ewt(*), rpar(*)
-   integer, intent(in) :: ipar(*)
+   real*8, intent(in) :: tres, yin(neq), res(neq), rvin(neq)
+   real*8, intent(in) :: cj, delta, rpar(*)
+   integer, intent(in) :: ipar(*), lr
 
    real*8 :: wk1(*)
    integer :: ier
 
    real*8, intent(out) :: zv(neq)
 
-   real*8 :: jaclu(neq, neq)
+   real*8 :: precon(neq, neq)
    integer :: ipiv(neq)
    integer :: i
 
-   jaclu = jac
-!   call fidadjac(neq, tres, yin, ypin, res, jaclu, cj, ewt, 1, &
+   precon = -cj * jac
+   do i = 1, neq
+      precon(i, i) = precon(i, i) + 1
+   end do
+!   call fcvdjac(neq, tres, yin, ypin, res, jaclu, cj, ewt, 1, &
 !                    ipar, rpar, wk1, wk1, wk1, ier)
 
    zv = rvin
-   call dgesv(neq, 1, jaclu, neq, ipiv, zv, neq, ier)
+   call dgesv(neq, 1, precon, neq, ipiv, zv, neq, ier)
 
-end subroutine fidapsol
+end subroutine fcvpsol
 
-subroutine fidapset(tres, yin, ypin, res, cj, ewt, h, ipar, rpar, wk1, wk2, wk3, ier)
+subroutine fcvpset(tres, yin, res, jok, jcur, cj, h, ipar, rpar, wk1, wk2, wk3, ier)
 
    use solve_ida, only: neq, jac
 
    implicit none
 
-   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq)
-   real*8, intent(in) :: cj, ewt(*), h, rpar(*)
+   real*8, intent(in) :: tres, yin(neq), res(neq)
+   real*8, intent(in) :: cj, h, rpar(*)
    real*8 :: wk1(*), wk2(*), wk3(*)
 
-   integer, intent(in) :: ipar(*)
+   integer, intent(in) :: ipar(*), jok
 
-   integer, intent(out) :: ier
+   integer, intent(out) :: ier, jcur
 
-   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
-                    ipar, rpar, wk1, wk2, wk3, ier)
+   jcur = 1
+   if (jok == 0) then
+      call fcvdjac(neq, tres, yin, res, jac, h, &
+                   ipar, rpar, wk1, wk2, wk3, ier)
+      jcur = 0
+   end if
 
-end subroutine fidapset
+end subroutine fcvpset
 
    """
 
@@ -277,8 +287,8 @@ python module {modname} ! in
     interface  ! in :{modname}
         module solve_ida ! in :{modname}:{modname}.f90
             real*8 dimension({neq}) :: yp0
-            real*8 dimension(10) :: rout
-            integer dimension(25) :: iout
+            real*8 dimension(6) :: rout
+            integer dimension(21) :: iout
             real*8 dimension({neq},{neq}) :: mas
             real*8 dimension({neq}) :: y0
             real*8 dimension({neq}) :: diff
