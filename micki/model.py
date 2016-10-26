@@ -348,11 +348,11 @@ class Reaction(object):
                     found_fluid = True
                     D = species.D
             sites = 1
-            for species in self.products:
+            for species in self.reactants:
                 if isinstance(species, Adsorbate):
-                    for site in species.sites:
-                        sites *= site.symbol
-                elif not isinstance(species, Electron):
+                    sites *= species.symbol
+            for species in self.products:
+                if not isinstance(species, (Adsorbate, Electron)):
                     raise ValueError("All products must be adsorbates "
                                      "in diffusion reaction!")
             self.kfor = 1000 * D * self.Asite * mol * barr \
@@ -1018,9 +1018,10 @@ class Model(object):
         f2py.compile(program, modulename=modname,
                      extra_args='--quiet '
                                 '--f90flags="-Wno-unused-dummy-argument '
-                                '-Wno-unused-variable -w" -lsundials_fcvode '
-                                '-lsundials_cvode -lsundials_fnvecserial '
-                                '-lsundials_nvecserial -lmkl_rt -liomp5 ' +
+                                '-Wno-unused-variable -w -fopenmp" ' 
+                                '-lsundials_fcvode '
+                                '-lsundials_cvode -lsundials_fnvecopenmp '
+                                '-lsundials_nvecopenmp -lmkl_rt -lgomp ' +
                                 os.path.join(dname, pyfname),
                      source_fn=os.path.join(dname, fname), verbose=0)
 

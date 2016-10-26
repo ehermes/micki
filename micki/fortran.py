@@ -26,11 +26,18 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    integer :: nthreads, iatol, ier
    integer :: i
    integer :: meth, itmeth
-   integer, external :: OMP_GET_NUM_THREADS
+   integer, external :: OMP_GET_NUM_THREADS, OMP_GET_THREAD_NUM
+   integer :: myid
 
    iatol = 2
    constr_vec = 1.d0
-   nthreads = OMP_GET_NUM_THREADS()
+
+   !$OMP PARALLEL DEFAULT(private) SHARED(nthreads)
+   myid = OMP_GET_THREAD_NUM()
+   if (myid == 0) then
+      nthreads = OMP_GET_NUM_THREADS()
+   end if
+   !$OMP END PARALLEL
 
    y0 = y0in
    yp0 = 0
@@ -49,8 +56,8 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
 !   call fcvfun(0.d0, y0, yp0, ipar, rpar, ier)
 
    ! initialize Sundials
-   call fnvinits(1, neq, ier)
-   !call fnvinitomp(2, neq, nthreads, ier)
+   !call fnvinits(1, neq, ier)
+   call fnvinitomp(1, neq, nthreads, ier)
    ! allocate memory
    call fcvmalloc(t0, y0, meth, itmeth, iatol, rtol, atol, iout, rout, &
                   ipar, rpar, ier)
@@ -64,7 +71,7 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
 !!   ! set maximum number of convergence failures (default = 10)
 !!   call fcvsetiin('MAX_CONVFAIL', 50, ier)
 !   ! set maximum order for LMM method (default = 5)
-!   call fcvsetiin('MAX_ORD', 2, ier)
+!   call fcvsetiin('MAX_ORD', 4, ier)
 !!   ! set nonlinear convergence test coefficient (default = 0.33)
 !!   call fcvsetrin('NLCONV_COEF', 0.67d0, ier)
 !   ! set initial step size
@@ -73,6 +80,8 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
 !   call fcvsetvin('ID_VEC', id_vec, ier)
 !   ! set constraints (all yi >= 0.)
 !   call fcvsetvin('CONSTR_VEC', constr_vec, ier)
+!   ! enable stability limit detection
+!   call fcvsetiin('STAB_LIM', 1, ier)
    ! initialize the solver
    call fcvdense(neq, ier)
    ! enable the jacobian
@@ -123,8 +132,8 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
       do while (tout - t1(i) > dt * 0.01)
          call fcvode(tout, t1(i), u1(:, i), itask, ier)
 !         call fcvsolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
-         print *, "Target time:", tout
-         print *, "Actual time:", t1(i)
+!         print *, "Target time:", tout
+!         print *, "Actual time:", t1(i)
       end do
       call fcvfun(t1(i), u1(:, i), du1(:, i), ipar, rpar, ier)
       call ratecalc({neq}, {nrates}, u1(:, i), r1(:, i))
