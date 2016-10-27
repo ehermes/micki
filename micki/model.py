@@ -133,6 +133,7 @@ class Reaction(object):
         self.Asite = None
         self.L = None
         self.scale_params = ['dH', 'dS', 'dH_act', 'dS_act', 'kfor', 'krev']
+        self.alpha = None
 
         # Scaling for sensitivity analysis, defaults to 1 (no scaling)
         self.scale = {}
@@ -199,16 +200,41 @@ class Reaction(object):
         self.Asite = Asite
         self.L = L
         self.dH = self.products.get_H(T) - self.reactants.get_H(T)
-        self.dH *= self.scale['dH']
+#        self.dH *= self.scale['dH']
         self.dS = self.products.get_S(T) - self.reactants.get_S(T)
-        self.dS *= self.scale['dS']
+#        self.dS *= self.scale['dS']
         self.dG = self.dH - self.T * self.dS
         if self.ts is not None:
             self.dH_act = self.ts.get_H(T) - self.reactants.get_H(T)
-            self.dH_act *= self.scale['dH_act']
+#            self.dH_act *= self.scale['dH_act']
             self.dS_act = self.ts.get_S(T) - self.reactants.get_S(T)
-            self.dS_act *= self.scale['dS_act']
+#            self.dS_act *= self.scale['dS_act']
             self.dG_act = self.dH_act - self.T * self.dS_act
+
+            self.ts_dE = np.sum([species.dE for species in self.ts])
+            self.reactants_dE = np.sum([species.dE for species in self.reactants])
+            self.products_dE = np.sum([species.dE for species in self.products])
+
+            G_react = np.sum([species.get_G(T) for species in self.reactants])
+            G_prod = np.sum([species.get_G(T) for species in self.products])
+            G_ts = np.sum([species.get_G(T) for species in self.ts])
+            dG_for = sym.sympify(G_ts - G_react)
+            dG_rev = sym.sympify(G_ts - G_prod)
+
+            all_symbols = set()
+            all_symbols.update(dG_for.atoms(sym.Symbol))
+            all_symbols.update(dG_rev.atoms(sym.symbol))
+            dG_for = dG_for.subs({symbol: 0 for symbol in all_symbols})
+            dG_rev = dG_rev.subs({symbol: 0 for symbol in all_symbols})
+
+#            dG_for = self.dG_act + (self.reactants_dE - self.ts_dE) #* self.scale['dH_act']
+#            dG_rev = self.dG_act - self.dG + (self.products_dE - self.ts_dE) #* self.scale['dH_act']
+
+            self.alpha = np.clip(dG_rev / (dG_for + dG_rev), 0, 1)
+
+            self.dG_act -= self.ts_dE
+            self.dG_act += self.alpha * self.reactants_dE
+            self.dG_act += (1 - self.alpha) * self.products_dE
 
             # If there is a coverage dependence, assume everything has
             # coverage 0

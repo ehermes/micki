@@ -80,8 +80,8 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
 !   call fcvsetvin('ID_VEC', id_vec, ier)
 !   ! set constraints (all yi >= 0.)
 !   call fcvsetvin('CONSTR_VEC', constr_vec, ier)
-!   ! enable stability limit detection
-!   call fcvsetiin('STAB_LIM', 1, ier)
+   ! enable stability limit detection
+   call fcvsetiin('STAB_LIM', 1, ier)
    ! initialize the solver
    call fcvdense(neq, ier)
    ! enable the jacobian
