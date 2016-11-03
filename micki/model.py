@@ -266,9 +266,9 @@ class Reaction(object):
                                   'Rounding to {}'.format(self, self.dG),
                                   RuntimeWarning, stacklevel=2)
                     self.dG_act = self.dG
-        self._calc_keq(T)
-        self._calc_kfor(T, Asite, L)
-        self._calc_krev(T, Asite, L)
+        self._calc_keq()
+        self._calc_kfor()
+        self._calc_krev()
         self.scale_old = self.scale.copy()
 
     def is_update_needed(self, T, Asite, L):
@@ -288,32 +288,32 @@ class Reaction(object):
                 return True
         return False
 
-    def get_keq(self, T, Asite, L=None):
+    def get_keq(self, T=None, Asite=None, L=None):
         self.update(T, Asite, L)
         return self.keq
 
-    def get_kfor(self, T, Asite, L=None):
+    def get_kfor(self, T=None, Asite=None, L=None):
         self.update(T, Asite, L)
         return self.kfor
 
-    def get_krev(self, T, Asite, L=None):
+    def get_krev(self, T=None, Asite=None, L=None):
         self.update(T, Asite, L)
         return self.krev
 
-    def _calc_keq(self, T):
-        self.keq = sym.exp(-self.dG / (kB * T)) \
+    def _calc_keq(self):
+        self.keq = sym.exp(-self.dG / (kB * self.T)) \
                 * self.products.get_reference_state() \
                 / self.reactants.get_reference_state() \
                 * self.scale['kfor'] / self.scale['krev']
 
-    def _calc_kfor(self, T, Asite, L=None):
+    def _calc_kfor(self):
         barr = 1
         if self.dG_act is not None:
-            barr *= sym.exp(-self.dG_act / (kB * T)) \
+            barr *= sym.exp(-self.dG_act / (kB * self.T)) \
                     / self.reactants.get_reference_state()
 #                    * self.ts.get_reference_state() \
         if self.method == 'EQUIL':
-            self.kfor = _k * T * barr / _hplanck * self.scale['kfor']
+            self.kfor = _k * self.T * barr / _hplanck * self.scale['kfor']
             if isinstance(self.keq, sym.Basic):
                 subs = {}
                 for atom in self.keq.atoms(sym.Symbol):
@@ -334,13 +334,13 @@ class Reaction(object):
                                          "can react with CT!")
                     found_fluid = True
                     fluid = species
-            Sfluid = fluid.get_S(T)
-            fluid._calc_qtrans2D(T, Asite)
+            Sfluid = fluid.get_S(self.T)
+            fluid._calc_qtrans2D(self.T, self.Asite)
             Strans = Sfluid - fluid.S['elec'] - fluid.S['rot'] - fluid.S['vib']
             Slost = Strans / fluid.S['trans']
             dS = (fluid.S['trans2D'] - fluid.S['trans']) * Slost
-            dG = fluid.E['trans2D'] - fluid.E['trans'] - T * dS
-            self.kfor = barr * _k * T / _hplanck * np.exp(-dG / (kB * T))
+            dG = fluid.E['trans2D'] - fluid.E['trans'] - self.T * dS
+            self.kfor = barr * _k * self.T / _hplanck * np.exp(-dG / (kB * self.T))
             self.kfor *= self.scale['kfor']
         elif self.method == 'ER':
             # Collision Theory
@@ -349,8 +349,8 @@ class Reaction(object):
             for species in self.reactants:
                 if isinstance(species, _Fluid):
                     m_react += species.atoms.get_masses().sum()
-            kfor1 = barr * 1000 * self.S0 * _Nav * Asite \
-                * np.sqrt(_k * T * kg / (2 * np.pi * m_react)) \
+            kfor1 = barr * 1000 * self.S0 * _Nav * self.Asite \
+                * np.sqrt(_k * self.T * kg / (2 * np.pi * m_react)) \
                 * self.scale['kfor']
 
             m_prod = 0.
@@ -358,13 +358,13 @@ class Reaction(object):
                 if isinstance(species, _Fluid):
                     m_prod = species.atoms.get_masses().sum()
             # FIXME: barr should be different for reverse reaction
-            krev2 = barr * 1000 * self.S0 * _Nav * Asite \
-                * np.sqrt(_k * T * kg / (2 * np.pi * m_prod)) \
+            krev2 = barr * 1000 * self.S0 * _Nav * self.Asite \
+                * np.sqrt(_k * self.T * kg / (2 * np.pi * m_prod)) \
                 * self.scale['krev']
             kfor2 = self.keq * krev2
             self.kfor = kfor1 * kfor2 / (kfor1 + kfor2)
         elif self.method == 'DIFF':
-            if L is None:
+            if self.L is None:
                 raise ValueError("Must provide diffusion length "
                                  "for diffusion reactions!")
             found_fluid = False
@@ -384,15 +384,15 @@ class Reaction(object):
                     raise ValueError("All products must be adsorbates "
                                      "in diffusion reaction!")
             self.kfor = 1000 * D * self.Asite * mol * barr \
-                * self.scale['kfor'] / (L * sites)
+                * self.scale['kfor'] / (self.L * sites)
         elif self.method == 'TST':
             # Transition State Theory
-            self.kfor = (_k * T / _hplanck) * barr * self.scale['kfor']
+            self.kfor = (_k * self.T / _hplanck) * barr * self.scale['kfor']
         else:
             raise ValueError("Method {} is not recognized!".format(
                 self.method))
 
-    def _calc_krev(self, T, Asite, L=None):
+    def _calc_krev(self):
         self.krev = self.kfor / self.keq
 
     def __repr__(self):
@@ -728,20 +728,21 @@ class Model(object):
                 if species not in self.fixed and species is not self.solvent:
                     self.symbols.append(species.symbol)
 
+        # subs converts a species symbol to either its initial value if
+        # it is fixed or to a constraint (such as constraining the total
+        # number of adsorption sites)
+        subs = {}
+
         # A vacancy will be represented by the total number of sites
         # minus the symbol of each species that occupies one of its sites.
         for vacancy in self.vacancy:
             vacsymbols = self.vactot[vacancy]
             for species in self.vacspecies[vacancy]:
                 vacsymbols -= species.symbol
-            self.symbols_dict[vacancy] = vacsymbols
+            subs[vacancy.symbol] = vacsymbols
 
         # nsymbols is the size of the differential equations
         self.nsymbols = len(self.symbols)
-        # subs converts a species symbol to either its initial value if
-        # it is fixed or to a constraint (such as constraining the total
-        # number of adsorption sites)
-        subs = {}
 
         # known_symbols keeps track of user-provided symbols that the
         # model has seen, so that symbols referring to species not in
@@ -749,8 +750,6 @@ class Model(object):
         known_symbols = set()
         for species in self._species + self.vacancy:
             known_symbols.add(species.symbol)
-            if species.symbol is not self.symbols_dict[species]:
-                subs[species.symbol] = self.symbols_dict[species]
 
         # Create the final mass matrix of the proper dimensions
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
@@ -841,7 +840,7 @@ class Model(object):
                 U0i = self.U0[species]
                 if liquid or isinstance(species, _Fluid):
                     U0i *= self.V
-                subs[self.symbols_dict[species]] = U0i
+                subs[species.symbol] = U0i
 
         # sym.sympify ensures that subs will not fail (if the expression has no
         # sympy symbols in it, this would normally fail)
@@ -947,13 +946,13 @@ class Model(object):
                 # electron. All reactions are 0th order in electrons, even
                 # if they consume/produce electrons.
                 if not isinstance(species, Electron):
-                    rate_for *= self.symbols_dict[species]
+                    rate_for *= species.symbol
                 rate_count[species] -= 1
 
             # Products are created in the forward direction
             for species in reaction.products:
                 if not isinstance(species, Electron):
-                    rate_rev *= self.symbols_dict[species]
+                    rate_rev *= species.symbol
                 rate_count[species] += 1
 
             # Overall reaction rate (flux)
