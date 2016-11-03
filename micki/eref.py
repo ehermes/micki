@@ -2,9 +2,12 @@
 
 import numpy as np
 
+from ase import Atoms
 from ase.io import read
 from ase.data import chemical_symbols
 from ase.db.row import AtomsRow
+
+from micki.reactants import _Thermo
 
 
 class EnergyReference(dict):
@@ -19,7 +22,7 @@ class EnergyReference(dict):
     vibrational frequencies for the microkinetic model.
     """
     def __init__(self, species, index=0):
-        super(EnergyReference, self).__init__()
+        dict.__init__(self)
         symbols = []
         energies = []
         elements = set()
@@ -27,8 +30,12 @@ class EnergyReference(dict):
         self.initialized = False
 
         for sp in species:
+            if isinstance(sp, Atoms):
+                conf = sp
             if isinstance(sp, AtomsRow):
                 conf = sp.toatoms()
+            elif isinstance(sp, _Thermo):
+                conf = sp.atoms
             else:
                 conf = read(sp, index=index)
             symbols.append(conf.get_chemical_symbols())
