@@ -119,14 +119,6 @@ class Reaction(object):
         if isinstance(self.method, str):
             self.method = self.method.upper()
 
-        # FIXME: this might fail on valid reactions,
-        # I haven't thought about it fully yet
-        if self.adsorption \
-                and self.method not in ['EQUIL', 'CT', 'ER', 'DIFF']:
-            raise ValueError(
-                    "Method {} unsupported for adsorption reactions!".format(
-                        self.method))
-
         self.S0 = S0
         self.keq = None
         self.kfor = None
@@ -217,22 +209,51 @@ class Reaction(object):
             self.reactants_dE = np.sum([species.coverage for species in self.reactants])
             self.products_dE = np.sum([species.coverage for species in self.products])
 
+            self.ts_dE += np.sum([species.dE for species in self.ts])
+            self.reactants_dE += np.sum([species.dE for species in self.reactants])
+            self.products_dE += np.sum([species.dE for species in self.products])
+
             G_react = np.sum([species.get_G(T) for species in self.reactants])
             G_prod = np.sum([species.get_G(T) for species in self.products])
             G_ts = np.sum([species.get_G(T) for species in self.ts])
-            dG_for = sym.sympify(G_ts - G_react)
-            dG_rev = sym.sympify(G_ts - G_prod)
 
             all_symbols = set()
-            all_symbols.update(dG_for.atoms(sym.Symbol))
-            all_symbols.update(dG_rev.atoms(sym.Symbol))
-            dG_for = dG_for.subs({symbol: 0 for symbol in all_symbols})
-            dG_rev = dG_rev.subs({symbol: 0 for symbol in all_symbols})
+            all_symbols.update(sym.sympify(G_react).atoms(sym.Symbol))
+            all_symbols.update(sym.sympify(G_prod).atoms(sym.Symbol))
+            all_symbols.update(sym.sympify(G_ts).atoms(sym.Symbol))
 
-#            dG_for = self.dG_act + (self.reactants_dE - self.ts_dE) #* self.scale['dH_act']
-#            dG_rev = self.dG_act - self.dG + (self.products_dE - self.ts_dE) #* self.scale['dH_act']
+            G_react = sym.sympify(G_react).subs({symbol: 0 for symbol in all_symbols})
+            G_prod = sym.sympify(G_prod).subs({symbol: 0 for symbol in all_symbols})
+            G_ts = sym.sympify(G_ts).subs({symbol: 0 for symbol in all_symbols})
+            reactants_dE = sym.sympify(self.reactants_dE)
+            reactants_dE = reactants_dE.subs({symbol: 0 for symbol in all_symbols})
+            products_dE = sym.sympify(self.products_dE)
+            products_dE = products_dE.subs({symbol: 0 for symbol in all_symbols})
 
-            self.alpha = np.clip(dG_rev / (dG_for + dG_rev), 0, 1)
+            A = 2*reactants_dE - 2*products_dE
+            B = 2*G_ts - G_react - G_prod - 2*reactants_dE + 2*products_dE
+            C = -G_ts + G_prod
+
+            if abs(A) < 1e-8:
+                dG_for = G_ts - G_react
+                dG_rev = G_ts - G_prod
+                self.alpha = dG_rev / (dG_rev + dG_for)
+            else:
+
+                alpha1 = (-B + sym.sqrt(B**2 - 4*A*C))/(2*A)
+                alpha2 = (-B - sym.sqrt(B**2 - 4*A*C))/(2*A)
+
+                if 0 <= alpha1 <= 1:
+                    self.alpha = alpha1
+                elif 0 <= alpha2 <= 1:
+                    self.alpha = alpha2
+                elif alpha1 < 0 and alpha2 < 0:
+                    self.alpha = 0.
+                elif alpha1 > 1 and alpha2 > 1:
+                    self.alpha = 1.
+                else:
+                    print(self, alpha1, alpha2)
+                    raise ValueError("Failed to find alpha parameter!")
 
             self.dG_act -= self.ts_dE
             self.dG_act += self.alpha * self.reactants_dE
