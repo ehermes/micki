@@ -444,6 +444,9 @@ class Model(object):
             self.reactions[name] = reaction
             for species in reaction.species:
                 self._add_species(species)
+            if reaction.ts is not None:
+                for ts in reaction.ts:
+                    ts.lattice = self.lattice
             reaction.update(T=self.T, Asite=self.Asite, L=self.z)
 
     def set_solvent(self, solvent):
