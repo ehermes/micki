@@ -704,68 +704,53 @@ class Model(object):
         # This creates a symbol for each species named modelparamX where X
         # is a three-digit numerical identifier that corresponds to its
         # position in the order of species
-        self.symbols_all = sym.symbols(' '.join(['modelparam{}'.format(
-            str(i).zfill(3)) for i in range(size)]))
+        self.symbols_all = []
         # symbols_dict a Thermo object and returns its corresponding symbol
         self.symbols_dict = {}
         # symbols ONLY includes species that will be in the differential
         # equations. Fixed species are not included in this list
         self.symbols = []
-        i = 0
+
         for species in self._species:
+            self.symbols_all.append(species.symbol)
+            self.symbols_dict[species] = species.symbol
             if self.diffusion and isinstance(species, Liquid):
-                self.symbols_dict[species] = self.symbols_all[i]
-                if species is not self.solvent:
-                    for j in range(self.nz):
-                        # (species, 0) and species should have the same symbol,
-                        # as the correspond to the same variable
-                        self.symbols_dict[(species, j)] = self.symbols_all[i]
-                        # If we are doing diffusion and a Liquid species is
-                        # fixed, we only exclude the *last* gridpoint from
-                        # the differential equations.
-                        if not (j == self.nz - 1):
-                            if species is self.solvent or species in self.fixed:
-                                self.symbols.append(self.symbols_all[i])
-                        i += 1
-                else:
-                    # I don't remember what this is for,
-                    # so I'm removing it for now
-                    # self.symbols_dict[(species, 0)] = self.symbols_all[i]
-                    # self.symbols_dict[(species, 9)] = self.symbols_all[i]
-                    i += 1
+                if species is solvent:
+                    continue
+                for j in range(self.nz):
+                    newsymbol = Symbol(str(species.symbol) + str(j).zfill(3))
+                    self.symbols_all.append(newsymbol)
+                    self.symbols_dict[(species, j)] = newsymbol
+                    if j != self.nz - 1:
+                        if species is self.solvent or species in self.fixed:
+                            self.symbols.append(newsymbol)
             else:
-                self.symbols_dict[species] = self.symbols_all[i]
                 if species not in self.fixed and species is not self.solvent:
-                    self.symbols.append(self.symbols_all[i])
-                i += 1
+                    self.symbols.append(species.symbol)
 
         # A vacancy will be represented by the total number of sites
         # minus the symbol of each species that occupies one of its sites.
         for vacancy in self.vacancy:
             vacsymbols = self.vactot[vacancy]
             for species in self.vacspecies[vacancy]:
-                vacsymbols -= self.symbols_dict[species]
+                vacsymbols -= species.symbol
             self.symbols_dict[vacancy] = vacsymbols
 
         # nsymbols is the size of the differential equations
         self.nsymbols = len(self.symbols)
-        # trans_cov_symbols converts the species assigned symbol
-        # (species.symbol) to the model's internal symbol for that species
-        self.trans_cov_symbols = {}
+        # subs converts a species symbol to either its initial value if
+        # it is fixed or to a constraint (such as constraining the total
+        # number of adsorption sites)
+        subs = {}
+
         # known_symbols keeps track of user-provided symbols that the
         # model has seen, so that symbols referring to species not in
         # the model can be later removed.
         known_symbols = set()
-        for species in self._species:
-            if species.symbol is not None:
-                known_symbols.add(species.symbol)
-                self.trans_cov_symbols[species.symbol] = \
-                        self.symbols_dict[species]
-        for vacancy in self.vacancy:
-            if vacancy.symbol is not None:
-                known_symbols.add(vacancy.symbol)
-                self.trans_cov_symbols[vacancy.symbol] = \
-                        self.symbols_dict[vacancy]
+        for species in self._species + self.vacancy:
+            known_symbols.add(species.symbol)
+            if species.symbol is not self.symbols_dict[species]:
+                subs[species.symbol] = self.symbols_dict[species]
 
         # Create the final mass matrix of the proper dimensions
         self.M = np.zeros((self.nsymbols, self.nsymbols), dtype=int)
@@ -834,7 +819,6 @@ class Model(object):
         # subs is a dictionary whose keys are internal species symbols and
         # whose values are the initial concentrations of that species if it
         # is known, or 0 otherwise.
-        subs = {}
 
         # All symbols referring to unknown species are going to be replaced
         # by 0
@@ -972,16 +956,6 @@ class Model(object):
                     rate_rev *= self.symbols_dict[species]
                 rate_count[species] += 1
 
-            # If there are symbols in a species energy or rate, convert
-            # those symbols to the Model's internal symbols
-            if self.trans_cov_symbols is not None:
-                # subs fails if there are no Sympy objects in an expression,
-                # so we just check to make sure subs won't fail before using it
-                if isinstance(rate_for, sym.Basic):
-                    rate_for = rate_for.subs(self.trans_cov_symbols)
-                if isinstance(rate_rev, sym.Basic):
-                    rate_rev = rate_rev.subs(self.trans_cov_symbols)
-
             # Overall reaction rate (flux)
             rate = rate_for - rate_rev
 
@@ -1037,6 +1011,9 @@ class Model(object):
         for i in range(self.nsymbols):
             str_trans[sym.fcode(self.symbols[i], source_format='free')] = \
                     sym.fcode(y_vec[i + 1], source_format='free')
+        
+        str_list = [key for key in str_trans]
+        str_list.sort(key=len, reverse=True)
 
         # these will contain lists of strings, with each element being one
         # Fortran assignment for the master equation, Jacobian, and
@@ -1049,8 +1026,8 @@ class Model(object):
         for i in range(self.nsymbols):
             fcode = sym.fcode(self.f_sym[i], source_format='free')
             # Replace modelparam symbols with their y_vec counterpart
-            for key, val in str_trans.items():
-                fcode = fcode.replace(key, val)
+            for key in str_list:
+                fcode = fcode.replace(key, str_trans[key])
             # Create actual line of code for calculating residual
             rescode.append('   res({}) = '.format(i + 1) + fcode)
 
@@ -1064,16 +1041,16 @@ class Model(object):
                 # times in Fortran, so we omit those.
                 if expr != 0:
                     fcode = sym.fcode(expr, source_format='free')
-                    for key, val in str_trans.items():
-                        fcode = fcode.replace(key, val)
+                    for key in str_list:
+                        fcode = fcode.replace(key, str_trans[key])
                     jaccode.append('   jac({}, {}) = '.format(j + 1, i + 1) +
                                    fcode)
 
         # See residual above
         for i, rate in enumerate(self.rates):
             fcode = sym.fcode(rate, source_format='free')
-            for key, val in str_trans.items():
-                fcode = fcode.replace(key, val)
+            for key in str_list:
+                fcode = fcode.replace(key, str_trans[key])
             ratecode.append('   rates({}) = '.format(i + 1) + fcode)
 
         # We insert all of the parameters of this differential equation into
