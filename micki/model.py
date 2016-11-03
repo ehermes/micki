@@ -223,7 +223,7 @@ class Reaction(object):
 
             all_symbols = set()
             all_symbols.update(dG_for.atoms(sym.Symbol))
-            all_symbols.update(dG_rev.atoms(sym.symbol))
+            all_symbols.update(dG_rev.atoms(sym.Symbol))
             dG_for = dG_for.subs({symbol: 0 for symbol in all_symbols})
             dG_rev = dG_rev.subs({symbol: 0 for symbol in all_symbols})
 
