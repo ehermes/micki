@@ -631,12 +631,20 @@ class Model(object):
             self.set_up_grid()
 
         # Start with the incomplete user-provided initial conditions
-        self.U0 = U0
+        self.U0 = U0.copy()
 
         # Initialize counter for vacancies
         occsites = {species: 0 for species in self.vacancy}
 
-        for species in self.U0:
+        for name in self.U0:
+            try:
+                species = self.species[name]
+            except KeyError:
+                for species in self.vacancy:
+                    if species.label == name:
+                        break
+                else:
+                    raise ValueError('Species {} is unknown!'.format(name))
             # Ignore all initial conditions for the number of empty sites
             if species in self.vacancy:
                 warnings.warn('Initial condition for vacancy concentration '
@@ -656,15 +664,15 @@ class Model(object):
             # occupied sites counter
             if species.sites is not None:
                 for site in species.sites:
-                    occsites[site] += self.U0[species]
+                    occsites[site] += self.U0[name]
 
             # If we're specifying a Liquid concentration with diffusion
             # enabled, U0[species]
             # must equal U0[(species, nz-1)]
             if self.diffusion and isinstance(species, Liquid):
                 if (species, self.nz - 1) in self.U0:
-                    assert abs(self.U0[species] -
-                               self.U0[(species, self.nz - 1)]) < 1e-6, \
+                    assert abs(self.U0[name] -
+                               self.U0[(name, self.nz - 1)]) < 1e-6, \
                                "Liquid concentrations not consistent!"
 
         self.vactot = {}
@@ -683,7 +691,7 @@ class Model(object):
                     "Too many adsorbates on {}!".format(species)
             # Normalize the concentration of empty sites to match the
             # appropriate site ratio from the lattice.
-            U0[species] = self.vactot[species] - occsites[species]
+            self.U0[name] = self.vactot[species] - occsites[species]
 #            if species not in U0:
 #                self.vactot[species] = 1.
 #                U0[species] = 1. - occsites[species]
@@ -691,24 +699,24 @@ class Model(object):
 #                self.vactot[species] = U0[species] + occsites[species]
 
         # Populate dictionary of initial conditions for all species
-        for species in self._species:
+        for name, species in self.species.items():
             # Assume concentration of unnamed species is 0
-            if species not in self.U0:
-                self.U0[species] = 0.
+            if name not in self.U0:
+                self.U0[name] = 0.
             # If we are doing diffusion, liquid species should have initial
             # concentrations for ALL diffusion grid points. We will assume a
             # flat concentration profile initially at the user specified
             # bulk concentration (or 0 if the user didn't specify anything)
             if self.diffusion and isinstance(species, Liquid):
-                U0i = self.U0[species]
+                U0i = self.U0[name]
                 if species is not self.solvent:
                     for i in range(self.nz):
                         # The user can also specify concentration at individual
                         # grid points
-                        if (species, i) not in self.U0:
-                            self.U0[(species, i)] = U0i
+                        if (name, i) not in self.U0:
+                            self.U0[(name, i)] = U0i
                         else:
-                            U0i = self.U0[(species, i)]
+                            U0i = self.U0[(name, i)]
 
         # The number of variables that will be in our differential equations
         size = len(self._species)
@@ -858,7 +866,7 @@ class Model(object):
                         and species is not self.solvent:
                     species = (species, self.nz - 1)
                     liquid = True
-                U0i = self.U0[species]
+                U0i = self.U0[species.label]
                 if liquid or isinstance(species, _Fluid):
                     U0i *= self.V
                 subs[species.symbol] = U0i
@@ -889,7 +897,7 @@ class Model(object):
         for symbol in self.symbols:
             for species, isymbol in self.symbols_dict.items():
                 if symbol == isymbol:
-                    U0i = self.U0[species]
+                    U0i = self.U0[species.label]
                     if type(species) is tuple \
                             or isinstance(species, _Fluid):
                         U0i *= self.V
@@ -1142,8 +1150,8 @@ class Model(object):
                 if self.diffusion and isinstance(species, Liquid) \
                         and species is not self.solvent:
                     species = (species, self.nz - 1)
-                dUi[species] = 0.
-                Ui[species] = self.U0[species]
+                dUi[species.label] = 0.
+                Ui[species.label] = self.U0[species.label]
             for j, symbol in enumerate(self.symbols):
                 for species, isymbol in self.symbols_dict.items():
                     if symbol == isymbol:
@@ -1153,17 +1161,20 @@ class Model(object):
                                 or isinstance(species, _Fluid):
                             Uij /= self.V
                             dUij /= self.V
-                        Ui[species] = Uij
-                        dUi[species] = dUij
+                        Ui[species.label] = Uij
+                        dUi[species.label] = dUij
             for vacancy in self.vacancy:
-                Ui[vacancy] = self.vactot[vacancy]
+                Ui[vacancy.label] = self.vactot[vacancy]
                 for species in self.vacspecies[vacancy]:
-                    Ui[vacancy] -= Ui[species]
-                dUi[vacancy] = 0
+                    Ui[vacancy.label] -= Ui[species.label]
+                dUi[vacancy.label] = 0
 
             j = 0
+            rxn_to_name = {}
+            for name, reaction in self.reactions.items():
+                rxn_to_name[reaction] = name
             for reaction in self._reactions:
-                ri[reaction] = r1[j][i]
+                ri[rxn_to_name[reaction]] = r1[j][i]
                 j += 1
                 if self.diffusion and reaction.all_liquid:
                     for i in range(self.nz):
@@ -1182,7 +1193,6 @@ class Model(object):
 
     def copy(self, initialize=True):
         newmodel = Model(self.T, self.Asite, self.z, self.nz, self.shape, self.lattice)
-        newmodel.add_species(self.species)
         newmodel.add_reactions(self.reactions)
         newmodel.set_fixed(self.fixed)
         newmodel.set_solvent(self.solvent)
