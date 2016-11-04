@@ -7,6 +7,8 @@ import tempfile
 import shutil
 import warnings
 
+from collections import OrderedDict
+
 import numpy as np
 import sympy as sym
 
@@ -40,7 +42,7 @@ class Reaction(object):
 
         # Determine the number of sites on the LHS and the RHS of the reaction,
         # then add "bare" sites as necessary to balance the site number.
-        vacancies = {}
+        vacancies = OrderedDict() 
         self.species = []
         for species in self.reactants:
             if species not in self.species:
@@ -130,7 +132,7 @@ class Reaction(object):
         self.alpha = None
 
         # Scaling for sensitivity analysis, defaults to 1 (no scaling)
-        self.scale = {}
+        self.scale = OrderedDict() 
         for param in self.scale_params:
             self.scale[param] = 1.0
         self.scale_old = self.scale.copy()
@@ -426,12 +428,12 @@ class Reaction(object):
 
 class Model(object):
     def __init__(self, T, Asite, z=0, nz=1, shape='FLAT', lattice=None):
-        self.reactions = {}
+        self.reactions = OrderedDict()
         self._reactions = []
         self._species = []
-        self.species = {}
+        self.species = OrderedDict()
         self.vacancy = []
-        self.vacspecies = {}
+        self.vacspecies = OrderedDict()
         self.solvent = None
         self.fixed = []
         self.initialized = False
@@ -477,18 +479,17 @@ class Model(object):
                 warnings.warn('Overriding old solvent {} with {}.'
                               ''.format(solvent, self.solvent),
                               RuntimeWarning, stacklevel=2)
+            if not isinstance(self.species[solvent], Liquid):
+                raise ValueError("Solvent must be a Liquid!")
             self.solvent = solvent
 
     def set_fixed(self, fixed):
         # Fixed species are removed from the differential equations
-        if isinstance(fixed, _Thermo):
+        if isinstance(fixed, str):
             fixed = [fixed]
-        for species in fixed:
-            if species not in self.fixed:
-                self.fixed.append(species)
-        # Make sure all fixed species are in the model
-        for species in self.fixed:
-            self._add_species(species)
+        for name in fixed:
+            if name not in self.fixed:
+                self.fixed.append(name)
 
     def _add_species(self, species):
         assert isinstance(species, _Thermo)
@@ -709,7 +710,7 @@ class Model(object):
             # bulk concentration (or 0 if the user didn't specify anything)
             if self.diffusion and isinstance(species, Liquid):
                 U0i = self.U0[name]
-                if species is not self.solvent:
+                if species.label != self.solvent:
                     for i in range(self.nz):
                         # The user can also specify concentration at individual
                         # grid points
@@ -724,7 +725,7 @@ class Model(object):
         if self.diffusion:
             size += (self.nz - 1) * self.nliquid
             # If the solvent is a liquid, don't count it
-            if self.solvent is not None and isinstance(self.solvent, Liquid):
+            if self.solvent is not None:
                 size -= self.nz - 1
         # Initialize "mass matrix", which is a diagonal matrix with 1s for
         # differential elements and 0s for algebraic elements (steady-state)
@@ -735,7 +736,7 @@ class Model(object):
         # position in the order of species
         self.symbols_all = []
         # symbols_dict a Thermo object and returns its corresponding symbol
-        self.symbols_dict = {}
+        self.symbols_dict = OrderedDict()
         # symbols ONLY includes species that will be in the differential
         # equations. Fixed species are not included in this list
         self.symbols = []
@@ -744,17 +745,17 @@ class Model(object):
             self.symbols_all.append(species.symbol)
             self.symbols_dict[species] = species.symbol
             if self.diffusion and isinstance(species, Liquid):
-                if species is solvent:
+                if species.label == solvent:
                     continue
                 for j in range(self.nz):
                     newsymbol = Symbol(str(species.symbol) + str(j).zfill(3))
                     self.symbols_all.append(newsymbol)
                     self.symbols_dict[(species, j)] = newsymbol
                     if j != self.nz - 1:
-                        if species is self.solvent or species in self.fixed:
+                        if species.label == self.solvent or species.label in self.fixed:
                             self.symbols.append(newsymbol)
             else:
-                if species not in self.fixed and species is not self.solvent:
+                if species.label not in self.fixed and species.label != self.solvent:
                     self.symbols.append(species.symbol)
 
         # subs converts a species symbol to either its initial value if
@@ -800,7 +801,7 @@ class Model(object):
             f = 0
             # DETAILED BALANCE NOTE: See discussion in _rate_init
             if self.diffusion and isinstance(species, Liquid) \
-                    and species is not self.solvent:
+                    and species.label != self.solvent:
                 for i in range(self.nz):
                     f = 0
                     # At each grid point, add all-liquid reaction rates
@@ -828,18 +829,18 @@ class Model(object):
                     # If we were looking at the last grid point and the species
                     # is fixed, discard what we just calculated
                     if i != self.nz - 1:
-                        if species is not self.solvent and species not in self.fixed:
+                        if species.label != self.solvent and species.label not in self.fixed:
                             self.f_sym.append(f)
                 else:
                     # This is necessary to avoid double-counting non-fixed
                     # liquid species. continue skips the below "if" statement
                     continue
-            elif species not in self.vacancy and species not in self.fixed and species is not self.fixed:
+            elif species not in self.vacancy and species.label not in self.fixed:
                 # Reactions involving on-surface species
                 for i, rate in enumerate(self.rates):
                     f += self.rate_count[i][species] * rate
             # Discard rates for fixed species
-            if species not in self.fixed and species is not self.solvent:
+            if species.label not in self.fixed and species.label != self.solvent:
                 self.f_sym.append(f)
             else:
                 assert f == 0, "Fixed species rate of change not zero!"
@@ -860,10 +861,10 @@ class Model(object):
         # Fixed species must have their symbols replaced by their fixed
         # initial values.
         for species in self._species:
-            if species in self.fixed or species is self.solvent:
+            if species.label in self.fixed or species.label == self.solvent:
                 liquid = False
                 if self.diffusion and isinstance(species, Liquid) \
-                        and species is not self.solvent:
+                        and species.label != self.solvent:
                     species = (species, self.nz - 1)
                     liquid = True
                 U0i = self.U0[species.label]
@@ -1012,7 +1013,7 @@ class Model(object):
                     subs = {}
                     for species in self._species:
                         if isinstance(species, Liquid) \
-                                and species is not self.solvent:
+                                and species.label != self.solvent:
                             new_rate_count[(species, i)] = rate_count[species]
                             subs[self.symbols_dict[species]] = \
                                 self.symbols_dict[(species, i)]
@@ -1146,12 +1147,13 @@ class Model(object):
             Ui = {}
             dUi = {}
             ri = {}
-            for species in self.fixed + [self.solvent]:
+            for name in self.fixed + [self.solvent]:
+                species = self.species[name]
                 if self.diffusion and isinstance(species, Liquid) \
-                        and species is not self.solvent:
+                        and name != self.solvent:
                     species = (species, self.nz - 1)
-                dUi[species.label] = 0.
-                Ui[species.label] = self.U0[species.label]
+                dUi[name] = 0.
+                Ui[name] = self.U0[name]
             for j, symbol in enumerate(self.symbols):
                 for species, isymbol in self.symbols_dict.items():
                     if symbol == isymbol:
