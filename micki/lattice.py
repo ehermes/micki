@@ -11,16 +11,26 @@ class Lattice(object):
     def __init__(self, neighborlist):
         self.neighborlist = neighborlist
         self.sites = [site for site in neighborlist]
+        if isinstance(self.sites[0], str):
+            self.string_names = True
+        elif isinstance(self.sites[0], _Thermo):
+            self.string_names = False
+        else:
+            raise ValueError('All sites must be _Thermo objects or strings!')
+
+        sitetype = str if self.string_names else _Thermo
+
+        for site in self.sites:
+            if not isinstance(site, sitetype):
+                raise ValueError('All sites must be _Thermo objects or strings!')
 
         # Sanity check the input
         self.totneighbors = {}
         for site, neighbors in neighborlist.items():
-            if not isinstance(site, _Thermo):
-                raise ValueError("Must be a _Thermo object")  # XXX Make this error better
             self.totneighbors[site] = 0
             for neighbor, val in neighbors.items():
                 self.totneighbors[site] += val
-                if neighbor not in self.neighborlist:
+                if neighbor not in self.sites:
                     raise ValueError("Neighbor {} is unknown!".format(neighbor))
             for site in self.sites:
                 if site not in neighbors:
@@ -50,6 +60,29 @@ class Lattice(object):
             print("Eigenvectors: {}".format(eigenvecs))
             raise ValueError("Failed to find the element ratio! Please "
                              "double-check your neighbor count.")
+
+    def update_site_names(self, string_to_thermo):
+        if not self.string_names:
+            raise RuntimeError('Sites are already _Thermo objects!')
+
+        for site in self.sites:
+            if site not in string_to_thermo:
+                raise ValueError('No _Thermo object for site {}!'.format(site))
+
+        new_sites = []
+        new_neighborlist = {}
+
+        for string, thermo in string_to_thermo.items():
+            if string not in self.sites:
+                raise ValueError('Unknown site name {}!'.format(string))
+            new_sites.append(thermo)
+            new_neighborlist[thermo] = {}
+            for neighbor, count in self.neighborlist[string].items():
+                new_neighborlist[thermo] = string_to_thermo[neighbor]
+
+        self.sites = new_sites
+        self.neighborlist = new_neighborlist
+        self.string_names = False
 
     def get_S_conf(self, sites):
         if sites is None or isinstance(sites, _Thermo) or len(sites) == 1:

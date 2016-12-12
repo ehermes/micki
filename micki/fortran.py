@@ -97,6 +97,54 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
 
 end subroutine initialize
 
+subroutine find_steady_state(neqin, nrates, dt, maxiter, epsilon, t1, u1, du1, r1)
+
+   use solve_ida, only: y0, yp0, iout, rout
+
+   implicit none
+
+   integer, intent(in) :: neqin, nrates, maxiter
+   real*8, intent(in) :: dt, epsilon
+
+   real*8 :: rpar(1)
+   integer :: ipar(1)
+
+   real*8, intent(out) :: t1, u1(neqin), du1(neqin), r1(nrates)
+
+   real*8 :: tout, epsilon2
+   integer :: itask, ier
+   integer :: i
+
+   logical :: converged = .FALSE.
+
+   epsilon2 = epsilon**2
+   i = 0
+   itask = 1
+   tout = 0.0d0
+   u1 = y0
+   du1 = yp0
+   t1 = 0.d0
+
+   do while (.not. converged)
+      if (tout - t1 < dt * 0.01) then
+         tout = tout + dt
+      end if
+      call fcvode(tout, t1, u1, itask, ier)
+      i = i + 1
+      call fcvfun(t1, u1, du1, ipar, rpar, ier)
+      if (maxval(du1**2) < epsilon2) then
+         converged = .TRUE.
+      end if
+      if (i >= maxiter) then
+         print *, "ODE NOT CONVERGED!"
+         exit
+      end if
+   end do
+   
+   call ratecalc({neq}, {nrates}, u1, r1)
+
+end subroutine find_steady_state
+
 subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
 
    use solve_ida, only: y0, yp0, iout, rout
@@ -313,6 +361,18 @@ python module {modname} ! in
             real*8 dimension(*),intent(in) :: rpar
             real*8 dimension(neqin),intent(in),depend(neqin) :: id_vec
         end subroutine initialize
+        subroutine find_steady_state(neqin,nrates,dt,maxiter,epsilon,t1,u1,du1,r1) ! in :{modname}:{modname}.f90
+            use solve_ida, only: y0,yp0,iout,rout
+            integer intent(in) :: neqin
+            integer intent(in) :: nrates
+            real*8 intent(in) :: dt
+            integer intent(in) :: maxiter
+            real*8 intent(in) :: epsilon
+            real*8 intent(out) :: t1
+            real*8 intent(out),dimension(neqin),depend(neqin) :: u1
+            real*8 intent(out),dimension(neqin),depend(neqin) :: du1
+            real*8 intent(out),dimension(nrates),depend(nrates) :: r1
+        end subroutine find_steady_state
         subroutine solve(neqin,nrates,nt,tfinal,t1,u1,du1,r1) ! in :{modname}:{modname}.f90
             use solve_ida, only: y0,yp0,neq
             integer intent(in) :: neqin

@@ -2,10 +2,14 @@
 and collections of species"""
 
 import copy
+import warnings
 import numpy as np
+
+from sympy import Symbol
 
 from ase import Atoms
 from ase.io import read
+from ase.db import connect
 from ase.db.row import AtomsRow
 from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal, _Nav
 
@@ -20,8 +24,7 @@ class _Thermo(object):
     modeutions to the partition function from translation, rotation,
     and vibration."""
 
-    def __init__(self, dft, symm=1, spin=0., ts=False,
-                 label=None, eref=None, metal=None, dE=0., symbol=None):
+    def __init__(self):
         self.T = None
 
         self.mode = ['tot', 'trans', 'trans2D', 'rot', 'vib', 'elec']
@@ -34,50 +37,98 @@ class _Thermo(object):
         self.scale = {'E': dict.fromkeys(self.mode, 1.0),
                       'S': dict.fromkeys(self.mode, 1.0),
                       'H': 1.0}
-
-        self.dft = dft
-
-        if isinstance(self.dft, AtomsRow):
-            db = True
-            self.atoms = self.dft.toatoms()
-        else:
-            db = False
-            self.atoms = read(self.dft, index=0)
-
-        self.metal = metal
-        self.mass = [masses[atom.symbol] for atom in self.atoms]
-        self.atoms.set_masses(self.mass)
-        self.eref = eref
-
-        if db:
-            try:
-                self.freqs = np.array(self.dft.data['freqs'])
-            except KeyError:
-                raise ValueError("ase.db objects must have vibrational "
-                                 "frequencies stored as data with key "
-                                 "'freqs'!")
-        else:
-            if 'OUTCAR' in self.dft:
-                self._read_hess_outcar()
-            elif self.dft.endswith('.xml'):
-                self._read_hess_xml()
-
-        self.potential_energy = self.atoms.get_potential_energy()
-        self.symm = symm
-        self.spin = spin
-        self.ts = ts
-        self.label = label
-        self.dE = dE
-
         self.scale_old = copy.deepcopy(self.scale)
 
+        self.atoms = None
+        self.metal = None
+        self.eref = None
+        self.potential_energy = 0.
+        self.symm = 1
+        self.spin = 0.
+        self.ts = False
+        self.label = None
+        self.coverage = 0.
+        self.dE = 0.
+        self.sites = []
+        self.lattice = None
+        self.D = None
+        self.Sliq = None
+        self.rho0 = 1.
+
+    def set_atoms(self, atoms):
+        if atoms is None:
+            self._atoms = atoms
+            return
+        elif isinstance(atoms, AtomsRow):
+            self._atoms = atoms.toatoms()
+        elif isinstance(atoms, Atoms):
+            self._atoms = atoms
+        else:
+            raise ValueError("Unrecognized atoms object!")
+        self.mass = [masses[atom.symbol] for atom in self.atoms]
+        self.atoms.set_masses(self.mass)
+        self.update_potential_energy()
+
+    def get_atoms(self):
+        return self._atoms
+
+    atoms = property(get_atoms, set_atoms)
+
+    def set_reference(self, reference):
+        self._eref = reference
+        self.update_potential_energy()
+
+    def get_reference(self):
+        return self._eref
+
+    eref = property(get_reference, set_reference)
+
+    def update_potential_energy(self):
+        if self.atoms is None or len(self.atoms) == 0:
+            self.potential_energy = 0.
+        else:
+            self.potential_energy = self.atoms.get_potential_energy()
         if self.eref is not None:
             for element in self.atoms.get_chemical_symbols():
                 self.potential_energy -= self.eref[element]
+    
+    def set_sites(self, sites):
+        if isinstance(sites, list):
+            self._sites = sites
+        elif isinstance(sites, Adsorbate):
+            self._sites = [sites]
+        else:
+            raise ValueError("Invalid format for adsorption sites")
 
-        self.symbol = symbol
-        self.sites = None
-        self.lattice = None
+    def get_sites(self):
+        return self._sites
+
+    sites = property(get_sites, set_sites)
+
+    def set_freqs(self, freqs):
+        self._freqs = np.array(freqs)
+
+    def get_freqs(self):
+        return self._freqs
+
+    freqs = property(get_freqs, set_freqs)
+
+    def set_label(self, label):
+        self._label = label
+        if label is None:
+            self._symbol = None
+        else:
+            self._symbol = Symbol(label)
+
+    def get_label(self):
+        return self._label
+
+    label = property(get_label, set_label)
+
+    def get_symbol(self):
+        return self._symbol
+
+    symbol = property(get_symbol, None)
 
     def update(self, T=None):
         """Updates the object's thermodynamic properties"""
@@ -90,8 +141,6 @@ class _Thermo(object):
         self.T = T
         self._calc_q(T)
         self.scale_old = copy.deepcopy(self.scale)
-#        self.E['tot'] += self.dE
-#        self.H += self.dE
 
     def is_update_needed(self, T):
         if self.q['tot'] is None:
@@ -104,7 +153,7 @@ class _Thermo(object):
 
     def get_H(self, T=None):
         self.update(T)
-        return (self.H + self.dE) * self.scale['H']
+        return (self.H + self.coverage) * self.scale['H']
 
     def get_S(self, T=None):
         self.update(T)
@@ -112,12 +161,11 @@ class _Thermo(object):
 
     def get_G(self, T=None):
         self.update(T)
-        return (self.H + self.dE) * self.scale['H'] - \
-            T * self.S['tot'] * self.scale['S']['tot']
+        return self.get_H(T) - T * self.get_S(T)
 
     def get_E(self, T=None):
         self.update(T)
-        return (self.E['tot'] + self.dE) * self.scale['E']['tot']
+        return (self.E['tot'] + self.coverage) * self.scale['E']['tot']
 
     def get_q(self, T=None):
         self.update(T)
@@ -125,6 +173,48 @@ class _Thermo(object):
 
     def get_reference_state(self):
         raise NotImplementedError
+
+    def save_to_db(self, db):
+        if isinstance(db, str):
+            db = connect(db)
+        elif not isinstance(db, Database):
+            raise ValueError("Must pass active ASE DB connection, or name of ASE DB file!")
+
+        data = {'freqs': self.freqs,
+                'ts': self.ts,
+                'symm': self.symm,
+                'spin': self.spin,
+                'D': self.D,
+                'S': self.Sliq,
+                'rhoref': self.rho0,
+                'sites': [site.label for site in self.sites],
+                'dE': self.dE}
+
+        if isinstance(self, Adsorbate):
+            data['thermo'] = 'Adsorbate'
+        elif isinstance(self, Gas):
+            data['thermo'] = 'Gas'
+        elif isinstance(self, Liquid):
+            data['thermo'] = 'Liquid'
+        else:
+            raise ValueError("Unknown Thermo object type {}".format(type(self)))
+
+        if self.lattice:
+            warnings.warn('Lattice cannot be stored in a db! You must recreate '
+                          'the lattice when you re-use this species.',
+                          RuntimeWarning, stacklevel=2)
+
+        if self.eref:
+            warnings.warn('Energy reference cannot be stored in a db! You must '
+                          'recreate the energy reference when you re-use this '
+                          'species.', RuntimeWarning, stacklevel=2)
+
+        if self.coverage != 0.:
+            warnings.warn('Coverage dependence cannot be stored in a db! You '
+                          'must recreate the coverage dependence when you '
+                          're-use this species.', RuntimeWarning, stacklevel=2)
+
+        db.write(self.atoms, name=self.label, data=data)
 
     def _calc_q(self, T):
         raise NotImplementedError
@@ -175,138 +265,10 @@ class _Thermo(object):
             self.scale['S']['vib']
 
     def _calc_qelec(self, T):
-        self.E['elec'] = self.potential_energy * self.scale['E']['elec']
+        self.E['elec'] = self.potential_energy + self.dE
+        self.E['elec'] *= self.scale['E']['elec']
         self.S['elec'] = kB * np.log(2. * self.spin + 1.) * \
             self.scale['S']['elec']
-
-    def _read_hess_outcar(self):
-        # This reads the hessian from the OUTCAR and diagonalizes it
-        # to find the frequencies, rather than reading the frequencies
-        # directly from the OUTCAR. This is to ensure we use the same
-        # unit conversion factors, and also to make sure we use the same
-        # atom masses for all calculations. Also, allows for the possibility
-        # of doing partial hessian diagonalization should we want to do that.
-        hessblock = 0
-        with open(self.dft, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line != '':
-                    if hessblock == 1:
-                        if line.startswith('---'):
-                            hessblock = 2
-
-                    elif hessblock == 2:
-                        line = line.split()
-                        dof = len(line)
-                        hess = np.zeros((dof, dof), dtype=float)
-                        index = np.zeros(dof, dtype=int)
-                        cart = np.zeros(dof, dtype=int)
-                        for i, direction in enumerate(line):
-                            index[i] = int(direction[:-1]) - 1
-                            if direction[-1] == 'X':
-                                cart[i] = 0
-                            elif direction[-1] == 'Y':
-                                cart[i] = 1
-                            elif direction[-1] == 'Z':
-                                cart[i] = 2
-                            else:
-                                raise ValueError("Error reading Hessian!")
-                        hessblock = 3
-                        j = 0
-
-                    elif hessblock == 3:
-                        line = line.split()
-                        hess[j] = np.array([float(val) for val in line[1:]],
-                                           dtype=float)
-                        j += 1
-
-                    elif line.startswith('SECOND DERIVATIVES'):
-                        hessblock = 1
-
-                elif hessblock == 3:
-                    break
-
-        hess = -(hess + hess.T) / 2.
-        self._diagonalize(index, hess)
-
-    def _read_hess_xml(self):
-        import xml.etree.ElementTree as ET
-
-        tree = ET.parse(self.dft)
-        root = tree.getroot()
-
-        vasp_mass = {}
-
-        for element in root.find("atominfo/array[@name='atomtypes']/set"):
-            vasp_mass[element[1].text.strip()] = float(element[2].text)
-
-        selective = np.ones((len(self.atoms), 3), dtype=bool)
-        constblock = root.find(
-                'structure[@name="initialpos"]/varray[@name="selective"]')
-        if constblock is not None:
-            for i, v in enumerate(constblock):
-                for j, fixed in enumerate(v.text.split()):
-                    selective[i, j] = (fixed == 'T')
-        index = []
-        for i, atom in enumerate(self.atoms):
-            for direction in selective[i]:
-                if direction:
-                    index.append(i)
-
-        hess = np.zeros((len(index), len(index)), dtype=float)
-
-        for i, v in enumerate(root.find(
-                'calculation/dynmat/varray[@name="hessian"]')):
-            hess[i] = -np.array([float(val) for val in v.text.split()])
-
-        vasp_massvec = np.zeros(len(index), dtype=float)
-        for i, j in enumerate(index):
-            vasp_massvec[i] = vasp_mass[self.atoms[j].symbol]
-
-        hess *= np.sqrt(np.outer(vasp_massvec, vasp_massvec))
-
-        self._diagonalize(index, hess)
-
-    def _diagonalize(self, index, hess):
-        mass = np.array([self.atoms[i].mass for i in index], dtype=float)
-        hess /= np.sqrt(np.outer(mass, mass))
-
-        # Temporary work around: My test system OUTCARs include some
-        # metal atoms in the hessian, this seems to cause some problems
-        # with the MKM. So, here I'm taking only the non-metal part
-        # of the hessian and diagonalizing that.
-        nonmetal = []
-        for i, j in enumerate(index):
-            if self.atoms[j].symbol != self.metal:
-                nonmetal.append(i)
-        if not nonmetal:
-            self.freqs = np.array([])
-            return
-        self.hess = np.zeros((len(nonmetal), len(nonmetal)))
-        self.index = np.zeros(len(nonmetal), dtype=int)
-        for i, a in enumerate(nonmetal):
-            self.index[i] = index[a]
-            for j, b in enumerate(nonmetal):
-                self.hess[i, j] = hess[a, b]
-
-#        mass = np.array([self.atoms[i].mass for i in self.index], dtype=float)
-#        self.hess /= np.sqrt(np.outer(mass, mass))
-        self.hess *= _hplanck**2 * J * m**2 * kg / (4 * np.pi**2)
-        v, w = np.linalg.eig(self.hess)
-
-        # We're taking the square root of an array that could include
-        # negative numbers, so the result has to be complex.
-        freq = np.sqrt(np.array(v, dtype=complex))
-        self.freqs = np.zeros_like(freq, dtype=float)
-
-        # We don't want to deal with complex numbers, so we just convert
-        # imaginary numbers to negative reals.
-        for i, val in enumerate(freq):
-            if val.imag == 0:
-                self.freqs[i] = val.real
-            else:
-                self.freqs[i] = -val.imag
-        self.freqs.sort()
 
     def _is_linear(self):
         pos = self.atoms.get_positions()
@@ -341,22 +303,32 @@ class _Thermo(object):
 
 class _Fluid(_Thermo):
     """Master object for both liquids and gasses"""
-    def __init__(self, dft, symm=1, spin=0., label=None, eref=None, rhoref=1.,
-                 dE=0., symbol=None):
-        _Thermo.__init__(self, dft, symm, spin, False, label, eref, None,
-                         dE, symbol)
+    def __init__(self, atoms, freqs, label, symm=1, spin=0.,
+                 eref=None, rhoref=1., dE=0.):
+        _Thermo.__init__(self)
+        self.atoms = atoms
+        self.freqs = freqs
+        self.label = label
+        self.symm = symm
+        self.spin = spin
+        self.eref = eref
         self.linear = self._is_linear()
         self.ncut = 6 - self.linear + self.ts
         self.rho0 = rhoref
+        self.dE = dE
         assert np.all(self.freqs[self.ncut:] > 0), \
             "Extra imaginary frequencies found!"
 
     def get_reference_state(self):
         return self.rho0
 
-    def copy(self):
-        return self.__class__(self.dft, self.symm, self.spin,
-                              self.label, self.eref)
+    def copy(self, newlabel=None):
+        label = self.label
+        if newlabel is not None:
+            label = newlabel
+        return self.__class__(self.atoms, self.freqs, label,
+                              self.symm, self.spin, self.eref,
+                              self.rhoref, self.dE)
 
     def _calc_q(self, T):
         self._calc_qelec(T)
@@ -366,54 +338,34 @@ class _Fluid(_Thermo):
         self.q['tot'] = self.q['trans'] * self.q['rot'] * self.q['vib']
         self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + \
             self.E['vib']
-        self.H = self.E['tot']
+        self.H = self.E['tot'] #+ kB * T
         self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + \
             self.S['vib']
 
 
 class Electron(_Thermo):
-    def __init__(self, E, symbol, label=''):
-        self.dE = 0.
-
-        self.mode = ['tot', 'trans', 'trans2D', 'rot', 'vib', 'elec']
-
-        self.q = dict.fromkeys(self.mode)
-        self.S = dict.fromkeys(self.mode)
-        self.E = dict.fromkeys(self.mode)
-        self.H = None
-
-        self.scale = {'E': dict.fromkeys(self.mode, 1.0),
-                      'S': dict.fromkeys(self.mode, 1.0),
-                      'H': 1.0}
-
-        self.T = None
-
-        self.sites = None
-
+    def __init__(self, E, self_repulsion, label):
+        _Thermo.__init__(self)
         self.atoms = Atoms()
-
-        self.E['tot'] = self.E['elec'] = self.H = E
-        self.S['tot'] = self.S['elec'] = 0.
-        self.q['tot'] = 1.
-
-        for contrib in ['trans', 'rot', 'vib']:
-            self.E[contrib] = 0.
-            self.S[contrib] = 0.
-            self.q[contrib] = 1.
-
-        self.symbol = symbol
-
+        self.potential_energy = E
         self.label = label
-        self.lattice = None
+        self.coverage = self_repulsion * self.symbol
 
     def get_reference_state(self):
         return 1.
 
-    def copy(self):
-        return self.__class__(self.E, self.symbol, self.label)
+    def copy(self, newlabel=None):
+        label = self.label
+        if newlabel is not None:
+            label = newlabel
+        return self.__class(self.potential_energy, self.coverage, label)
 
     def _calc_q(self, T):
-        pass
+        self._calc_qelec(T)
+        self.q['tot'] = self.q['elec']
+        self.E['tot'] = self.E['elec']
+        self.H = self.E['tot']
+        self.S['tot'] = self.S['elec']
 
 
 class Gas(_Fluid):
@@ -421,9 +373,10 @@ class Gas(_Fluid):
 
 
 class Liquid(_Fluid):
-    def __init__(self, dft, symm=1, spin=0., label=None, eref=None, rhoref=1.,
-                 dE=0., symbol=None, S=None, D=None):
-        _Fluid.__init__(self, dft, symm, spin, label, eref, rhoref, dE, symbol)
+    def __init__(self, atoms, freqs, label, symm=1,
+                 spin=0., eref=None, rhoref=1., S=None, D=None, dE=0.):
+        _Fluid.__init__(self, atoms, freqs, label, symm, spin, eref,
+                        rhoref, dE)
         self.Sliq = S
         self.D = D
 
@@ -435,20 +388,32 @@ class Liquid(_Fluid):
         else:
             self.S['tot'] = self.Sliq
 
+    def copy(self, newlabel=None):
+        label = self.label
+        if newlabel is not None:
+            label = newlabel
+        return self.__class__(self.atoms, self.freqs, label,
+                              self.symm, self.spin, self.eref,
+                              self.rhoref, self.Sliq, self.D, self.dE)
+
 
 class Adsorbate(_Thermo):
-    def __init__(self, dft, spin=0., ts=False, label=None, eref=None,
-                 metal=None, dE=0., symbol=None, sites=None, lattice=None):
-        _Thermo.__init__(self, dft, 1, spin, ts, label, eref, metal,
-                         dE, symbol)
+    def __init__(self, atoms, freqs, label, ts=None,
+                 spin=0., sites=[], lattice=None, eref=None, dE=0.,
+                 symm=1):
+        _Thermo.__init__(self)
+        self.atoms = atoms
+        self.freqs = freqs
+        self.label = label
+        self.ts = ts
+        self.spin = spin
+        self.sites = sites
+        self.lattice = lattice
+        self.eref = eref
+        self.dE = dE
+        self.symm = symm
         assert np.all(self.freqs[1 if ts else 0:] > 0), \
             "Imaginary frequencies found!"
-
-        if isinstance(sites, Adsorbate):
-            self.sites = [sites]
-        else:
-            self.sites = sites
-        self.lattice = lattice
 
     def get_reference_state(self):
         return 1.
@@ -460,12 +425,19 @@ class Adsorbate(_Thermo):
         self.E['tot'] = self.E['elec'] + self.E['vib']
         self.H = self.E['tot']
         self.S['tot'] = self.S['elec'] + self.S['vib']
+        self.S['tot'] -= kB * np.log(self.symm)
         if self.lattice is not None:
             self.S['tot'] += self.lattice.get_S_conf(self.sites)
 
-    def copy(self):
-        return self.__class__(self.dft, self.spin, self.ts,
-                              self.label, self.eref, self.metal)
+
+    def copy(self, newlabel=None):
+        label = self.label
+        if newlabel is not None:
+            label = newlabel
+        return self.__class__(self.atoms, self.freqs, label,
+                              self.ts, self.spin, self.sites,
+                              self.lattice, self.eref, self.dE,
+                              self.symm)
 
 
 class Shomate(_Thermo):
