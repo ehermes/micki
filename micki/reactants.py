@@ -322,8 +322,11 @@ class _Fluid(_Thermo):
     def get_reference_state(self):
         return self.rho0
 
-    def copy(self):
-        return self.__class__(self.atoms, self.freqs, self.label,
+    def copy(self, newlabel=None):
+        label = self.label
+        if newlabel is not None:
+            label = newlabel
+        return self.__class__(self.atoms, self.freqs, label,
                               self.symm, self.spin, self.eref,
                               self.rhoref, self.dE)
 
@@ -335,7 +338,7 @@ class _Fluid(_Thermo):
         self.q['tot'] = self.q['trans'] * self.q['rot'] * self.q['vib']
         self.E['tot'] = self.E['elec'] + self.E['trans'] + self.E['rot'] + \
             self.E['vib']
-        self.H = self.E['tot']
+        self.H = self.E['tot'] #+ kB * T
         self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + \
             self.S['vib']
 
@@ -351,9 +354,11 @@ class Electron(_Thermo):
     def get_reference_state(self):
         return 1.
 
-    def copy(self):
-        return self.__class(self.potential_energy, self.coverage,
-                            self.label)
+    def copy(self, newlabel=None):
+        label = self.label
+        if newlabel is not None:
+            label = newlabel
+        return self.__class(self.potential_energy, self.coverage, label)
 
     def _calc_q(self, T):
         self._calc_qelec(T)
@@ -383,15 +388,19 @@ class Liquid(_Fluid):
         else:
             self.S['tot'] = self.Sliq
 
-    def copy(self):
-        return self.__class__(self.atoms, self.freqs, self.label,
+    def copy(self, newlabel=None):
+        label = self.label
+        if newlabel is not None:
+            label = newlabel
+        return self.__class__(self.atoms, self.freqs, label,
                               self.symm, self.spin, self.eref,
                               self.rhoref, self.Sliq, self.D, self.dE)
 
 
 class Adsorbate(_Thermo):
     def __init__(self, atoms, freqs, label, ts=None,
-                 spin=0., sites=[], lattice=None, eref=None, dE=0.):
+                 spin=0., sites=[], lattice=None, eref=None, dE=0.,
+                 symm=1):
         _Thermo.__init__(self)
         self.atoms = atoms
         self.freqs = freqs
@@ -402,6 +411,7 @@ class Adsorbate(_Thermo):
         self.lattice = lattice
         self.eref = eref
         self.dE = dE
+        self.symm = symm
         assert np.all(self.freqs[1 if ts else 0:] > 0), \
             "Imaginary frequencies found!"
 
@@ -415,13 +425,19 @@ class Adsorbate(_Thermo):
         self.E['tot'] = self.E['elec'] + self.E['vib']
         self.H = self.E['tot']
         self.S['tot'] = self.S['elec'] + self.S['vib']
+        self.S['tot'] -= kB * np.log(self.symm)
         if self.lattice is not None:
             self.S['tot'] += self.lattice.get_S_conf(self.sites)
 
-    def copy(self):
-        return self.__class__(self.atoms, self.freqs, self.label,
+
+    def copy(self, newlabel=None):
+        label = self.label
+        if newlabel is not None:
+            label = newlabel
+        return self.__class__(self.atoms, self.freqs, label,
                               self.ts, self.spin, self.sites,
-                              self.lattice, self.dE)
+                              self.lattice, self.eref, self.dE,
+                              self.symm)
 
 
 class Shomate(_Thermo):

@@ -30,21 +30,23 @@ def row_to_thermo(row):
     sites = get_data(row, 'sites')
     rhoref = get_data(row, 'rhoref')
     dE = get_data(row, 'dE')
+    symm = get_data(row, 'symm')
+    ts = get_data(row, 'ts')
+    spin = get_data(row, 'spin')
+    D = get_data(row, 'D')
+    S = get_data(row, 'S')
 
     if thermo == 'Adsorbate':
-        ts = get_data(row, 'ts')
         return Adsorbate(row.toatoms(), freqs, name,
-                         ts=ts, sites=sites, dE=dE)
-    elif thermo in ['Gas', 'Liquid']:
-        symm = get_data(row, 'symm')
-        spin = get_data(row, 'spin')
-        if thermo == 'Gas':
-            return Gas(row.toatoms(), freqs, name,
-                       symm=symm, spin=spin, rhoref=rhoref, dE=dE)
-        D = get_data(row, 'D')
-        S = get_data(row, 'S')
+                         ts=ts, sites=sites, dE=dE, symm=symm)
+    elif thermo == 'Gas':
+        return Gas(row.toatoms(), freqs, name,
+                   symm=symm, spin=spin, rhoref=rhoref, dE=dE)
+    elif thermo == 'Liquid':
         return Liquid(row.toatoms(), freqs, name,
                       symm=symm, spin=spin, D=D, S=S, rhoref=rhoref, dE=dE)
+    else:
+        raise ValueError('Unknown Thermo type {}!'.format(thermo))
 
 # Creates a dictionary of Thermo objects from a properly-formatted ASE DB file.
 def read_from_db(db, names=None, eref=None):

@@ -23,7 +23,7 @@ from micki.lattice import Lattice
 
 class Reaction(object):
     def __init__(self, reactants, products, ts=None, method=None, S0=1.,
-                 dG_act=None, dground=False):
+                 dG_act=None, dground=False, reversible=True):
 
         # Wrap reactants and products in _Reactants type
         if isinstance(reactants, _Thermo):
@@ -130,6 +130,7 @@ class Reaction(object):
         self.L = None
         self.scale_params = ['dH', 'dS', 'dH_act', 'dS_act', 'kfor', 'krev']
         self.alpha = None
+        self.reversible = reversible
 
         # Scaling for sensitivity analysis, defaults to 1 (no scaling)
         self.scale = OrderedDict() 
@@ -346,6 +347,10 @@ class Reaction(object):
                 keq = self.keq
             if keq < 1:
                 self.kfor *= self.keq * self.scale['krev'] / self.scale['kfor']
+        elif self.method == 'DIEQUIL':
+            kfor1 = _k * self.T * barr / _hplanck * self.scale['kfor']
+            kfor2 = kfor1 * self.keq * self.scale['krev'] / self.scale['kfor']
+            self.kfor = kfor1 * kfor2 / (kfor1 + kfor2)
         elif self.method == 'CT':
             # CT is TST with the transition state being a non-interacting
             # 2D ideal gas.
@@ -427,7 +432,7 @@ class Reaction(object):
 
 
 class Model(object):
-    def __init__(self, T, Asite, z=0, nz=1, shape='FLAT', lattice=None):
+    def __init__(self, T, Asite, z=0, nz=0, shape='FLAT', lattice=None):
         self.reactions = OrderedDict()
         self._reactions = []
         self._species = []
@@ -450,7 +455,7 @@ class Model(object):
         # Do we need to consider diffusion?
         self.diffusion = False
         self.V = 1
-        if self.nz > 1:  # No numerical diffusion if there is only one grid point
+        if self.nz > 0:  # No numerical diffusion if there is only one grid point
             if self.z <= 0:
                 raise ValueError('Must specify boundary layer thickness for'
                                  'diffusion!')
@@ -577,29 +582,11 @@ class Model(object):
     lattice = property(get_lattice, set_lattice, doc='Model lattice')
 
     def set_up_grid(self):
-        if self.shape.upper() == 'FLAT':
-            self.dz = np.ones(self.nz - 1, dtype=float)
-        elif self.shape.upper() == 'GAUSSIAN':
-            self.dz = (np.exp(10*(0.5 - np.arange(self.nz - 1, dtype=float) /
-                                  (self.nz - 2))) + 1.)**-1
-        elif self.shape.upper() == 'EXP':
-            self.dz = np.exp(7. * np.arange(self.nz - 1, dtype=float) /
-                             (self.nz - 2))
-        self.dz *= self.z / self.dz.sum()
-        self.zi = np.zeros(self.nz, dtype=float)
-        for i in range(self.nz - 1):
-            self.zi[i] += self.dz[i]/2.
-            if i > 0:
-                self.zi[i] += self.dz[i-1]/2.
-        self.dV = _Nav * self.Asite * self.zi * 1000
-        self.dV[-1] = self.V - self.dV.sum()
-        # THIS SHOULD NEVER HAPPEN ANYMORE:
-        assert self.dV[-1] > 0, "Volume is too small/quiescent layer is " \
-                                "too thick! dV[-1] = {}".format(self.dV[-1])
-        self.zi[-1] = self.dV[-1] / (_Nav * self.Asite * 1000)
-        self.dz = list(self.dz)
-        self.dz.append(2 * self.zi[-1] - self.dz[-2])
-        self.dz = np.array(self.dz)
+        if self.shape.upper() != 'FLAT':
+            raise NotImplementedError
+        self.dz = self.z / self.nz
+        self.dV = _Nav * self.Asite * self.dz * 1000
+        assert self.V - self.dV * self.nz > 0, "Quiescent layer is too thick!"
 
     def set_initial_conditions(self, U0):
         if self.initialized:
@@ -745,15 +732,16 @@ class Model(object):
             self.symbols_all.append(species.symbol)
             self.symbols_dict[species] = species.symbol
             if self.diffusion and isinstance(species, Liquid):
-                if species.label == solvent:
+                if species.label == self.solvent:
                     continue
-                for j in range(self.nz):
-                    newsymbol = Symbol(str(species.symbol) + str(j).zfill(3))
+                self.symbols_dict[(species, self.nz - 1)] = species.symbol
+                for j in range(self.nz - 1):
+                    newsymbol = sym.Symbol(str(species.symbol) + str(j).zfill(3))
                     self.symbols_all.append(newsymbol)
                     self.symbols_dict[(species, j)] = newsymbol
-                    if j != self.nz - 1:
-                        if species.label == self.solvent or species.label in self.fixed:
-                            self.symbols.append(newsymbol)
+                    self.symbols.append(newsymbol)
+                if species.label not in self.fixed:
+                    self.symbols.append(species.symbol)
             else:
                 if species.label not in self.fixed and species.label != self.solvent:
                     self.symbols.append(species.symbol)
@@ -803,34 +791,34 @@ class Model(object):
             if self.diffusion and isinstance(species, Liquid) \
                     and species.label != self.solvent:
                 for i in range(self.nz):
+                    if i == self.nz - 1 and species.label in self.fixed:
+                        continue
                     f = 0
                     # At each grid point, add all-liquid reaction rates
                     for j, rate in enumerate(self.rates):
                         f += self.rate_count[j][(species, i)] * rate
-                    diff = species.D / self.zi[i]
+                    diff = species.D / self.dz
                     # For all grid points except the first, add diffusion away
                     # from the surface
                     if i > 0:
                         f += diff * (self.symbols_dict[(species, i-1)] -
                                      self.symbols_dict[(species, i)]) \
-                                             / self.dz[i-1]
+                                             / self.dz
                     # For all grid points except the last, add diffusion
                     # towards the surface
                     if i < self.nz - 1:
                         f += diff * (self.symbols_dict[(species, i+1)] -
                                      self.symbols_dict[(species, i)]) \
-                                             / self.dz[i]
+                                             / self.dz
                     # At the surface, account for any adsorption reactions
                     if i == 0:
                         for j, rate in enumerate(self.rates):
                             if self.is_rate_ads[j]:
                                 f += self.rate_count[j][species] * rate * \
-                                        self.V / self.dV[0]
+                                        self.V / self.dV
                     # If we were looking at the last grid point and the species
                     # is fixed, discard what we just calculated
-                    if i != self.nz - 1:
-                        if species.label != self.solvent and species.label not in self.fixed:
-                            self.f_sym.append(f)
+                    self.f_sym.append(f)
                 else:
                     # This is necessary to avoid double-counting non-fixed
                     # liquid species. continue skips the below "if" statement
@@ -863,11 +851,12 @@ class Model(object):
         for species in self._species:
             if species.label in self.fixed or species.label == self.solvent:
                 liquid = False
+                label = species.label
                 if self.diffusion and isinstance(species, Liquid) \
                         and species.label != self.solvent:
-                    species = (species, self.nz - 1)
+                    label = (species.label, self.nz - 1)
                     liquid = True
-                U0i = self.U0[species.label]
+                U0i = self.U0[label]
                 if liquid or isinstance(species, _Fluid):
                     U0i *= self.V
                 subs[species.symbol] = U0i
@@ -898,7 +887,10 @@ class Model(object):
         for symbol in self.symbols:
             for species, isymbol in self.symbols_dict.items():
                 if symbol == isymbol:
-                    U0i = self.U0[species.label]
+                    if isinstance(species, tuple):
+                        U0i = self.U0[(species[0].label, species[1])]
+                    else:
+                        U0i = self.U0[species.label]
                     if type(species) is tuple \
                             or isinstance(species, _Fluid):
                         U0i *= self.V
@@ -932,8 +924,8 @@ class Model(object):
                         liquid_diffusion = True
                         break
             if liquid_diffusion:
-                rate_for = reaction.get_kfor(self.T, self.Asite, self.zi[0])
-                rate_rev = reaction.get_krev(self.T, self.Asite, self.zi[0])
+                rate_for = reaction.get_kfor(self.T, self.Asite, self.dz/2.)
+                rate_rev = reaction.get_krev(self.T, self.Asite, self.dz/2.)
             else:
                 rate_for = reaction.get_kfor(self.T, self.Asite, self.z)
                 rate_rev = reaction.get_krev(self.T, self.Asite, self.z)
@@ -986,12 +978,14 @@ class Model(object):
                 rate_count[species] += 1
 
             # Overall reaction rate (flux)
-            rate = rate_for - rate_rev
+            rate = rate_for
+            if reaction.reversible:
+                rate -= rate_rev
 
             # For adsorption reactions, scale rates by the volume of the
             # first layer
             if reaction.adsorption and self.diffusion:
-                rate *= self.dV[0] / self.V
+                rate *= self.dV / self.V
 
             # Append all data to global rate lists
             self.rates.append(rate)
@@ -1003,7 +997,7 @@ class Model(object):
             # an exact mirror of what occurred above, but at different grid
             # points.
             if self.diffusion and reaction.all_liquid:
-                for i in range(self.nz):
+                for i in range(self.nz - 1):
                     new_rate_count = {}
                     for species in self._species:
                         new_rate_count[species] = 0
@@ -1128,11 +1122,75 @@ class Model(object):
         # are mapped onto finitialize, fsolve, and ffinalize inside the Model
         # object. We don't want users touching these manually
         self.finitialize = solve_ida.initialize
+        self.ffind_steady_state = solve_ida.find_steady_state
         self.fsolve = solve_ida.solve
         self.ffinalize = solve_ida.finalize
 
         # Delete the module file. We've already imported it, so it's in memory.
         os.remove(modname + '.so')
+
+    def _out_array_to_dict(self, U, dU, r):
+        Ui = {}
+        dUi = {}
+        ri = {}
+        for name in self.fixed + [self.solvent]:
+            if self.diffusion and isinstance(self.species[name], Liquid) \
+                    and name != self.solvent:
+                name = (name, self.nz - 1)
+            dUi[name] = 0.
+            Ui[name] = self.U0[name]
+        for j, symbol in enumerate(self.symbols):
+            for species, isymbol in self.symbols_dict.items():
+                if symbol == isymbol:
+                    if type(species) is tuple:
+                        label = (species[0].label, species[1])
+                        species = species[0]
+                    else:
+                        label = species.label
+
+                    Uij = U[j]
+                    dUij = dU[j]
+                    if isinstance(species, _Fluid):
+                        Uij /= self.V
+                        dUij /= self.V
+
+                    Ui[label] = Uij
+                    dUi[label] = dUij
+        for vacancy in self.vacancy:
+            Ui[vacancy.label] = self.vactot[vacancy]
+            for species in self.vacspecies[vacancy]:
+                Ui[vacancy.label] -= Ui[species.label]
+            dUi[vacancy.label] = 0
+
+        j = 0
+        rxn_to_name = {}
+        for name, reaction in self.reactions.items():
+            rxn_to_name[reaction] = name
+        for reaction in self._reactions:
+            ri[rxn_to_name[reaction]] = r[j]
+            j += 1
+            if self.diffusion and reaction.all_liquid:
+                for i in range(self.nz - 1):
+                    ri[(rxn_to_name[reaction], i)] = r[j]
+                    j += 1
+
+        return Ui, dUi, ri
+
+    def find_steady_state(self, dt=60, maxiter=2000, epsilon=1e-6):
+        t, U1, dU1, r1 = self.ffind_steady_state(self.nsymbols,
+                                                 len(self.rates),
+                                                 dt,
+                                                 maxiter,
+                                                 epsilon)
+        self.t = t
+        self.U = []
+        self.dU = []
+        self.r = []
+        U, dU, r = self._out_array_to_dict(U1.T, dU1.T, r1.T)
+        self.U.append(U)
+        self.dU.append(dU)
+        self.r.append(r)
+        return t, U, r
 
     def solve(self, t, ncp):
         self.t, U1, dU1, r1 = self.fsolve(self.nsymbols,
@@ -1144,50 +1202,12 @@ class Model(object):
         self.dU = []
         self.r = []
         for i, t in enumerate(self.t):
-            Ui = {}
-            dUi = {}
-            ri = {}
-            for name in self.fixed + [self.solvent]:
-                species = self.species[name]
-                if self.diffusion and isinstance(species, Liquid) \
-                        and name != self.solvent:
-                    species = (species, self.nz - 1)
-                dUi[name] = 0.
-                Ui[name] = self.U0[name]
-            for j, symbol in enumerate(self.symbols):
-                for species, isymbol in self.symbols_dict.items():
-                    if symbol == isymbol:
-                        Uij = self.U1[i][j]
-                        dUij = self.dU1[i][j]
-                        if type(species) is tuple \
-                                or isinstance(species, _Fluid):
-                            Uij /= self.V
-                            dUij /= self.V
-                        Ui[species.label] = Uij
-                        dUi[species.label] = dUij
-            for vacancy in self.vacancy:
-                Ui[vacancy.label] = self.vactot[vacancy]
-                for species in self.vacspecies[vacancy]:
-                    Ui[vacancy.label] -= Ui[species.label]
-                dUi[vacancy.label] = 0
-
-            j = 0
-            rxn_to_name = {}
-            for name, reaction in self.reactions.items():
-                rxn_to_name[reaction] = name
-            for reaction in self._reactions:
-                ri[rxn_to_name[reaction]] = r1[j][i]
-                j += 1
-                if self.diffusion and reaction.all_liquid:
-                    for i in range(self.nz):
-                        ri[(reaction, i)] = r1[j][i]
-                        j += 1
-#            for j, reaction in enumerate(self._reactions):
-#                ri[reaction] = r1[j][i]
+            Ui, dUi, ri = self._out_array_to_dict(self.U1[i], self.dU1[i],
+                                                  self.r1[i])
             self.U.append(Ui)
             self.dU.append(dUi)
             self.r.append(ri)
-        return self.U, self.dU, self.r
+        return self.U, self.r
 
     def finalize(self):
         self.initialized = False
