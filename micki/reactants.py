@@ -14,6 +14,7 @@ from ase.db.row import AtomsRow
 from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal, _Nav
 
 from micki.masses import masses
+from micki.io import parse_vasp_out
 
 
 class _Thermo(object):
@@ -54,6 +55,7 @@ class _Thermo(object):
         self.D = None
         self.Sliq = None
         self.rho0 = 1.
+        self.freqs = []
 
     def set_atoms(self, atoms):
         if atoms is None:
@@ -63,6 +65,11 @@ class _Thermo(object):
             self._atoms = atoms.toatoms()
         elif isinstance(atoms, Atoms):
             self._atoms = atoms
+        elif isinstance(atoms, str):
+            # TODO: make this more robust (catch/handle errors)
+            a, f = parse_vasp_out(atoms)
+            self._atoms = a
+            self.freqs = f
         else:
             raise ValueError("Unrecognized atoms object!")
         self.mass = [masses[atom.symbol] for atom in self.atoms]
@@ -106,7 +113,8 @@ class _Thermo(object):
     sites = property(get_sites, set_sites)
 
     def set_freqs(self, freqs):
-        self._freqs = np.array(freqs)
+        if freqs is not None:
+            self._freqs = np.array(freqs)
 
     def get_freqs(self):
         return self._freqs
@@ -303,7 +311,7 @@ class _Thermo(object):
 
 class _Fluid(_Thermo):
     """Master object for both liquids and gasses"""
-    def __init__(self, atoms, freqs, label, symm=1, spin=0.,
+    def __init__(self, atoms, label, freqs=None, symm=1, spin=0.,
                  eref=None, rhoref=1., dE=0.):
         _Thermo.__init__(self)
         self.atoms = atoms
@@ -326,7 +334,7 @@ class _Fluid(_Thermo):
         label = self.label
         if newlabel is not None:
             label = newlabel
-        return self.__class__(self.atoms, self.freqs, label,
+        return self.__class__(self.atoms, label, self.freqs,
                               self.symm, self.spin, self.eref,
                               self.rhoref, self.dE)
 
@@ -373,9 +381,9 @@ class Gas(_Fluid):
 
 
 class Liquid(_Fluid):
-    def __init__(self, atoms, freqs, label, symm=1,
+    def __init__(self, atoms, label, freqs=None, symm=1,
                  spin=0., eref=None, rhoref=1., S=None, D=None, dE=0.):
-        _Fluid.__init__(self, atoms, freqs, label, symm, spin, eref,
+        _Fluid.__init__(self, atoms, label, freqs, symm, spin, eref,
                         rhoref, dE)
         self.Sliq = S
         self.D = D
@@ -392,13 +400,13 @@ class Liquid(_Fluid):
         label = self.label
         if newlabel is not None:
             label = newlabel
-        return self.__class__(self.atoms, self.freqs, label,
+        return self.__class__(self.atoms, label, self.freqs,
                               self.symm, self.spin, self.eref,
                               self.rhoref, self.Sliq, self.D, self.dE)
 
 
 class Adsorbate(_Thermo):
-    def __init__(self, atoms, freqs, label, ts=None,
+    def __init__(self, atoms, label, freqs=None, ts=None,
                  spin=0., sites=[], lattice=None, eref=None, dE=0.,
                  symm=1):
         _Thermo.__init__(self)
@@ -434,7 +442,7 @@ class Adsorbate(_Thermo):
         label = self.label
         if newlabel is not None:
             label = newlabel
-        return self.__class__(self.atoms, self.freqs, label,
+        return self.__class__(self.atoms, label, self.freqs,
                               self.ts, self.spin, self.sites,
                               self.lattice, self.eref, self.dE,
                               self.symm)

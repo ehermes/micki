@@ -1133,7 +1133,10 @@ class Model(object):
         Ui = {}
         dUi = {}
         ri = {}
-        for name in self.fixed + [self.solvent]:
+        fixed = self.fixed
+        if self.solvent is not None:
+            fixed += [self.solvent]
+        for name in fixed:
             if self.diffusion and isinstance(self.species[name], Liquid) \
                     and name != self.solvent:
                 name = (name, self.nz - 1)
