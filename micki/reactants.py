@@ -63,6 +63,7 @@ class _Thermo(object):
             return
         elif isinstance(atoms, AtomsRow):
             self._atoms = atoms.toatoms()
+            self.freqs = atoms.data.get('freqs')
         elif isinstance(atoms, Atoms):
             self._atoms = atoms
         elif isinstance(atoms, str):
