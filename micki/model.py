@@ -666,6 +666,7 @@ class Model(object):
         self.vactot = {}
         # Determine what the initial vacancy concentration should be
         for species in self.vacancy:
+            name = species.label
             # If a vacancy species is part of the lattice, get its maximum
             # concentration from its relative abundance. Otherwise, assume
             # it is 1.
