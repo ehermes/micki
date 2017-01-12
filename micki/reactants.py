@@ -371,6 +371,8 @@ class Electron(_Thermo):
 
     def _calc_q(self, T):
         self._calc_qelec(T)
+        if self.q['elec'] is None:
+            self.q['elec'] = 1.
         self.q['tot'] = self.q['elec']
         self.E['tot'] = self.E['elec']
         self.H = self.E['tot']
