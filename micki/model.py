@@ -1194,6 +1194,7 @@ class Model(object):
         self.U.append(U)
         self.dU.append(dU)
         self.r.append(r)
+        self.check_rates(U)
         return t, U, r
 
     def solve(self, t, ncp):
@@ -1211,11 +1212,34 @@ class Model(object):
             self.U.append(Ui)
             self.dU.append(dUi)
             self.r.append(ri)
+        self.check_rates(self.U[-1])
         return self.U, self.r
 
     def finalize(self):
         self.initialized = False
 #        self.ffinalize()
+
+    def check_rates(self, U, epsilon=1e-6):
+        symbol_to_coverage = {}
+        for name, Ui in U.items():
+            if name in self.species and self.species[name].symbol is not None:
+                symbol_to_coverage[self.species[name].symbol] = Ui
+
+        for species in self.vacancy:
+            if species.label in U and species.symbol is not None:
+                symbol_to_coverage[species.symbol] = U[species.label]
+
+        for name, reaction in self.reactions.items():
+            kfor = sym.sympify(reaction.kfor).subs(symbol_to_coverage)
+            krev = sym.sympify(reaction.krev).subs(symbol_to_coverage)
+            kmax = _k * self.T / _hplanck
+            for k, word in [(kfor, "Forwards"), (krev, "Reverse")]:
+                ratio = k / kmax
+                if (ratio - 1.0) > 1e-6:
+                    warnings.warn(word + " rate constant for {} is too large! "
+                                  "Value is {} kB T / h (should be <= 1)."
+                                  "".format(reaction, ratio),
+                                  RuntimeWarning, stacklevel=2)
 
     def copy(self, initialize=True):
         newmodel = Model(self.T, self.Asite, self.z, self.nz, self.shape, self.lattice)
