@@ -393,11 +393,11 @@ class Liquid(_Fluid):
 
     def _calc_q(self, T):
         _Fluid._calc_q(self, T)
-        if self.Sliq is None:
-            # Use Trouton's Rule
-            self.S['tot'] -= (4.5 + np.log(T)) * kB
-        else:
-            self.S['tot'] = self.Sliq
+#        if self.Sliq is None:
+#            # Use Trouton's Rule
+#            self.S['tot'] -= (4.5 + np.log(T)) * kB
+#        else:
+#            self.S['tot'] = self.Sliq
 
     def copy(self, newlabel=None):
         label = self.label
