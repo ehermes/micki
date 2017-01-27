@@ -44,30 +44,18 @@ class ModelAnalysis(object):
         for species in self.species_symbols:
             subs[species.symbol] = self.U[species.label]
 
-        if isinstance(keq, sym.Basic):
-            keq = keq.subs(subs)
-        if keq >= 0:
-            kmid = reaction.get_kfor(self.model.T,
-                                     self.model.Asite,
-                                     self.model.z)
-        else:
-            kmid = reaction.get_krev(self.model.T,
-                                     self.model.Asite,
-                                     self.model.z)
+        kmid = reaction.get_kfor(self.model.T,
+                                 self.model.Asite,
+                                 self.model.z)
 
         if isinstance(kmid, sym.Basic):
             kmid = kmid.subs(subs)
 
         reaction.set_scale('kfor', 1.0 - scale)
         reaction.set_scale('krev', 1.0 - scale)
-        if keq >= 0:
-            klow = reaction.get_kfor(self.model.T,
-                                     self.model.Asite,
-                                     self.model.z)
-        else:
-            klow = reaction.get_krev(self.model.T,
-                                     self.model.Asite,
-                                     self.model.z)
+        klow = reaction.get_kfor(self.model.T,
+                                 self.model.Asite,
+                                 self.model.z)
         model = self.model.copy()
 
         try:
@@ -88,14 +76,9 @@ class ModelAnalysis(object):
 
         reaction.set_scale('kfor', 1.0 + scale)
         reaction.set_scale('krev', 1.0 + scale)
-        if keq >= 0:
-            khigh = reaction.get_kfor(self.model.T,
-                                      self.model.Asite,
-                                      self.model.z)
-        else:
-            khigh = reaction.get_krev(self.model.T,
-                                      self.model.Asite,
-                                      self.model.z)
+        khigh = reaction.get_kfor(self.model.T,
+                                  self.model.Asite,
+                                  self.model.z)
         model = self.model.copy()
 
         try:
