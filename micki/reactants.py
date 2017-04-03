@@ -15,6 +15,7 @@ from ase.units import J, mol, _hplanck, m, kg, _k, kB, _c, Pascal, _Nav
 
 from micki.masses import masses
 from micki.io import parse_vasp_out
+from micki.utils import calculate_avg_vdw_radius
 
 
 class _Thermo(object):
@@ -325,6 +326,7 @@ class _Fluid(_Thermo):
         self.ncut = 6 - self.linear + self.ts
         self.rho0 = rhoref
         self.dE = dE
+        self._R = None
         assert np.all(self.freqs[self.ncut:] > 0), \
             "Extra imaginary frequencies found!"
 
@@ -350,6 +352,13 @@ class _Fluid(_Thermo):
         self.H = self.E['tot'] #+ kB * T
         self.S['tot'] = self.S['elec'] + self.S['trans'] + self.S['rot'] + \
             self.S['vib']
+
+    def get_R(self):
+        if self._R is None:
+            self._R = calculate_avg_vdw_radius(self.atoms)
+        return self._R
+    
+    R = property(get_R, None)
 
 
 class Electron(_Thermo):

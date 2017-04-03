@@ -413,6 +413,17 @@ class Reaction(object):
                                      "in diffusion reaction!")
             self.kfor = 1000 * D * self.Asite * mol * barr \
                 * self.scale['kfor'] / (self.L * sites)
+        elif self.method == 'DIFF_LIQ':
+            if len(self.reactants) != 2:
+                raise ValueError("DIFF_LIQ rate only defined for reactions "
+                                 "with exactly two reactants!")
+            if not self.all_liquid:
+                raise ValueError("DIFF_LIQ rate only defined for all-liquid "
+                                 "phase reactions!")
+            Rtot = self.reactants[0].R + self.reactants[1].R
+            Dtot = self.reactants[0].D + self.reactants[1].D
+            self.kfor = 4 * np.pi * Dtot * Rtot * 1e-10 * 1000 * _Nav
+            self.kfor *= self.scale['kfor']
         elif self.method == 'TST':
             # Transition State Theory
             self.kfor = (_k * self.T / _hplanck) * barr * self.scale['kfor']
@@ -1180,7 +1191,7 @@ class Model(object):
 
         return Ui, dUi, ri
 
-    def find_steady_state(self, dt=60, maxiter=2000, epsilon=1e-6):
+    def find_steady_state(self, dt=60, maxiter=2000, epsilon=1e-8):
         t, U1, dU1, r1 = self.ffind_steady_state(self.nsymbols,
                                                  len(self.rates),
                                                  dt,

@@ -31,11 +31,11 @@ class ModelAnalysis(object):
         for species in self.model._species:
             if species.symbol is not None:
                 self.species_symbols.append(species)
+        self.rmid = self.r[self.reaction_name]
 
     def campbell_rate_control(self, rxn_name, scale=0.001):
         reaction = self.model.reactions[rxn_name]
 
-        rmid = self.r[self.reaction_name]
         keq = reaction.get_keq(self.model.T,
                                self.model.Asite,
                                self.model.z)
@@ -99,7 +99,7 @@ class ModelAnalysis(object):
         reaction.set_scale('kfor', 1.0)
         reaction.set_scale('krev', 1.0)
 
-        return kmid * (rhigh - rlow) / (rmid * (khigh - klow))
+        return kmid * (rhigh - rlow) / (self.rmid * (khigh - klow))
 
     def thermodynamic_rate_control(self, names, dg=None):
         T = self.model.T
@@ -111,7 +111,6 @@ class ModelAnalysis(object):
         else:
             species = [self.model.species[name] for name in names]
 
-        rmid = self.r[self.reaction_name]
         gmid = species[0].get_G(T)
         gmid = species[0].get_H(T) - T * species[0].get_S(T)
         if isinstance(gmid, sym.Basic):
@@ -170,10 +169,9 @@ class ModelAnalysis(object):
 #        self.check_converged(U2, r2)
         rhigh = r2[self.reaction_name]
 
-        return (rlow - rhigh) * kB * T / (rmid * dg)
+        return (rlow - rhigh) * kB * T / (self.rmid * dg)
 
     def activation_barrier(self, dT=0.01):
-        rmid = self.r[self.reaction_name]
         T = self.model.T
 
         model = self.model.copy(initialize=False)
@@ -196,7 +194,7 @@ class ModelAnalysis(object):
 
         rhigh = r2[self.reaction_name]
 
-        return kB * T**2 * (rhigh - rlow) / (rmid * 2 * dT)
+        return kB * T**2 * (rhigh - rlow) / (self.rmid * 2 * dT)
 
     def rate_order(self, name, drho=0.05):
         species = self.model.species[name]
@@ -204,7 +202,6 @@ class ModelAnalysis(object):
         rhomid = self.Uequil[species.label]
         assert rhomid > 0
 
-        rmid = self.r[self.reaction_name]
         U0 = self.Uequil.copy()
         rholow = rhomid * (1.0 - drho)
         U0[species.label] = rholow
@@ -225,7 +222,7 @@ class ModelAnalysis(object):
 #        self.check_converged(U2, r2)
         rhigh = r2[self.reaction_name]
 
-        return (rhomid / rmid) * (rhigh - rlow) / (rhohigh - rholow)
+        return (rhomid / self.rmid) * (rhigh - rlow) / (rhohigh - rholow)
 
     def drate_order_dg(self, fluid, adsorbates, rho_scale=0.01, g_scale=0.01):
         assert isinstance(fluid, _Fluid)
