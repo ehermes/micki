@@ -53,9 +53,11 @@ class ModelAnalysis(object):
 
         reaction.set_scale('kfor', 1.0 - scale)
         reaction.set_scale('krev', 1.0 - scale)
-        klow = reaction.get_kfor(self.model.T,
-                                 self.model.Asite,
-                                 self.model.z)
+        reaction.update(self.model.T,
+                        self.model.Asite,
+                        self.model.z,
+                        force=True)
+        klow = reaction.get_kfor()
         model = self.model.copy()
 
         try:
@@ -76,9 +78,11 @@ class ModelAnalysis(object):
 
         reaction.set_scale('kfor', 1.0 + scale)
         reaction.set_scale('krev', 1.0 + scale)
-        khigh = reaction.get_kfor(self.model.T,
-                                  self.model.Asite,
-                                  self.model.z)
+        reaction.update(self.model.T,
+                        self.model.Asite,
+                        self.model.z,
+                        force=True)
+        khigh = reaction.get_kfor()
         model = self.model.copy()
 
         try:
@@ -123,12 +127,15 @@ class ModelAnalysis(object):
             sp.dE -= dg
 
         for reaction in self.model._reactions:
+            oldalpha = reaction.alpha
             reaction.update(T=self.model.T,
                             Asite=self.model.Asite,
                             L=self.model.z,
                             force=True)
+            newalpha = reaction.alpha
 
-        model = self.model.copy()
+        model = self.model.copy(initialize=False)
+        model.set_initial_conditions(self.U)
 
         try:
             t1, U1, r1 = model.find_steady_state()
@@ -150,7 +157,8 @@ class ModelAnalysis(object):
                             L=self.model.z,
                             force=True)
 
-        model = self.model.copy()
+        model = self.model.copy(initialize=False)
+        model.set_initial_conditions(self.U)
 
         try:
             t2, U2, r2 = model.find_steady_state()

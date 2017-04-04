@@ -140,9 +140,9 @@ class _Thermo(object):
 
     symbol = property(get_symbol, None)
 
-    def update(self, T=None):
+    def update(self, T=None, force=False):
         """Updates the object's thermodynamic properties"""
-        if not self.is_update_needed(T):
+        if not self.is_update_needed(T) and not force:
             return
 
         if T is None:

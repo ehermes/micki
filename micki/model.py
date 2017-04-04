@@ -193,6 +193,9 @@ class Reaction(object):
         if not force and not self.is_update_needed(T, Asite, L):
             return
 
+        for species in self.species:
+            species.update(T=T, force=True)
+
         self.T = T
         self.Asite = Asite
         self.L = L
@@ -202,6 +205,9 @@ class Reaction(object):
 #        self.dS *= self.scale['dS']
         self.dG = self.dH - self.T * self.dS
         if self.ts is not None:
+            for species in self.ts:
+                species.update(T=T, force=True)
+
             self.dH_act = self.ts.get_H(T) - self.reactants.get_H(T)
 #            self.dH_act *= self.scale['dH_act']
             self.dS_act = self.ts.get_S(T) - self.reactants.get_S(T)
@@ -227,7 +233,7 @@ class Reaction(object):
 
             G_react = sym.sympify(G_react).subs({symbol: 0 for symbol in all_symbols})
             G_prod = sym.sympify(G_prod).subs({symbol: 0 for symbol in all_symbols})
-            G_ts = sym.sympify(G_ts).subs({symbol: 0 for symbol in all_symbols})
+            G_ts = sym.sympify(G_ts - self.ts_dE).subs({symbol: 0 for symbol in all_symbols})
             reactants_dE = sym.sympify(self.reactants_dE)
             reactants_dE = reactants_dE.subs({symbol: 0 for symbol in all_symbols})
             products_dE = sym.sympify(self.products_dE)
@@ -255,7 +261,6 @@ class Reaction(object):
                 elif alpha1 > 1 and alpha2 > 1:
                     self.alpha = 1.
                 else:
-                    print(self, alpha1, alpha2)
                     raise ValueError("Failed to find alpha parameter!")
 
             self.dG_act -= self.ts_dE
