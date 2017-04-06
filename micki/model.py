@@ -246,6 +246,10 @@ class Reaction(object):
             if abs(A) < 1e-8:
                 dG_for = G_ts - G_react
                 dG_rev = G_ts - G_prod
+                if dG_for < 0 or dG_rev < 0:
+                    raise ValueError("Negative activation energy found for reaction {}, "
+                                     "aborting calculation of alpha parameter. Maybe your "
+                                     "transition state is wrong?".format(self))
                 self.alpha = dG_rev / (dG_rev + dG_for)
             else:
 
@@ -261,7 +265,7 @@ class Reaction(object):
                 elif alpha1 > 1 and alpha2 > 1:
                     self.alpha = 1.
                 else:
-                    raise ValueError("Failed to find alpha parameter!")
+                    raise ValueError("Failed to find alpha parameter for reaction {}!".format(self))
 
             self.dG_act -= self.ts_dE
             self.dG_act += self.alpha * self.reactants_dE
