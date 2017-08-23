@@ -208,68 +208,36 @@ class Reaction(object):
             for species in self.ts:
                 species.update(T=T, force=True)
 
-            self.dH_act = self.ts.get_H(T) - self.reactants.get_H(T)
-#            self.dH_act *= self.scale['dH_act']
-            self.dS_act = self.ts.get_S(T) - self.reactants.get_S(T)
-#            self.dS_act *= self.scale['dS_act']
-            self.dG_act = self.dH_act - self.T * self.dS_act
+            Gts = self.ts.get_G(T)
+            Gr = self.reactants.get_G(T)
+            Gp = self.products.get_G(T)
 
-            self.ts_dE = np.sum([species.coverage for species in self.ts])
-            self.reactants_dE = np.sum([species.coverage for species in self.reactants])
-            self.products_dE = np.sum([species.coverage for species in self.products])
+            dEr = np.sum([species.coverage + species.dE for species in self.reactants])
+            dEp = np.sum([species.coverage + species.dE for species in self.products])
 
-            self.ts_dE += np.sum([species.dE for species in self.ts])
-            self.reactants_dE += np.sum([species.dE for species in self.reactants])
-            self.products_dE += np.sum([species.dE for species in self.products])
-
-            G_react = np.sum([species.get_G(T) for species in self.reactants])
-            G_prod = np.sum([species.get_G(T) for species in self.products])
-            G_ts = np.sum([species.get_G(T) for species in self.ts])
+            dGf = Gts - Gr + dEr
+            dGr = Gts - Gp + dEp
 
             all_symbols = set()
-            all_symbols.update(sym.sympify(G_react).atoms(sym.Symbol))
-            all_symbols.update(sym.sympify(G_prod).atoms(sym.Symbol))
-            all_symbols.update(sym.sympify(G_ts).atoms(sym.Symbol))
+            all_symbols.update(sym.sympify(dEr).atoms(sym.Symbol))
+            all_symbols.update(sym.sympify(dEp).atoms(sym.Symbol))
 
-            G_react = sym.sympify(G_react).subs({symbol: 0 for symbol in all_symbols})
-            G_prod = sym.sympify(G_prod).subs({symbol: 0 for symbol in all_symbols})
-            G_ts = sym.sympify(G_ts - self.ts_dE).subs({symbol: 0 for symbol in all_symbols})
-            reactants_dE = sym.sympify(self.reactants_dE)
-            reactants_dE = reactants_dE.subs({symbol: 0 for symbol in all_symbols})
-            products_dE = sym.sympify(self.products_dE)
-            products_dE = products_dE.subs({symbol: 0 for symbol in all_symbols})
-
-            A = 2*reactants_dE - 2*products_dE
-            B = 2*G_ts - G_react - G_prod - 2*reactants_dE + 2*products_dE
-            C = -G_ts + G_prod
-
-            if abs(A) < 1e-8:
-                dG_for = G_ts - G_react
-                dG_rev = G_ts - G_prod
-                if dG_for < 0 or dG_rev < 0:
-                    raise ValueError("Negative activation energy found for reaction {}, "
-                                     "aborting calculation of alpha parameter. Maybe your "
-                                     "transition state is wrong?".format(self))
-                self.alpha = dG_rev / (dG_rev + dG_for)
+            if (dEp - dEr).subs({symbol: 0 for symbol in all_symbols}) == 0:
+                self.alpha = dGf / (dGf + dGr)
             else:
-
-                alpha1 = (-B + sym.sqrt(B**2 - 4*A*C))/(2*A)
-                alpha2 = (-B - sym.sqrt(B**2 - 4*A*C))/(2*A)
-
-                if 0 <= alpha1 <= 1:
-                    self.alpha = alpha1
-                elif 0 <= alpha2 <= 1:
-                    self.alpha = alpha2
-                elif alpha1 < 0 and alpha2 < 0:
-                    self.alpha = 0.
-                elif alpha1 > 1 and alpha2 > 1:
-                    self.alpha = 1.
+                a1 = (2*dEp - 2*dEr - dGf - dGr - sym.sqrt(8*(dEp-dEr)*dGf + (-2*dEp + 2*dEr + dGf + dGr)**2))/(4*(dEp-dEr))
+                a1 = sym.sympify(a1).subs({symbol: 0 for symbol in all_symbols})
+                if 0. <= a1 <= 1:
+                    self.alpha = a1
                 else:
-                    raise ValueError("Failed to find alpha parameter for reaction {}!".format(self))
+                    a2 = (2*dEp - 2*dEr - dGf - dGr + sym.sqrt(8*(dEp-dEr)*dGf + (-2*dEp + 2*dEr + dGf + dGr)**2))/(4*(dEp-dEr))
+                    self.alpha = sym.sympify(a2).subs({symbol: 0 for symbol in all_symbols})
 
-            self.dG_act -= self.ts_dE
-            self.dG_act += self.alpha * self.reactants_dE
-            self.dG_act += (1 - self.alpha) * self.products_dE
+            self.dH_act = self.ts.get_H(T) + (1 - self.alpha) * dEr + self.alpha * dEp - self.reactants.get_H(T)
+            self.dH_act *= self.scale['dH_act']
+            self.dS_act = self.ts.get_S(T) - self.reactants.get_S(T)
+            self.dS_act *= self.scale['dS_act']
+            self.dG_act = self.dH_act - self.T * self.dS_act
 
             # If there is a coverage dependence, assume everything has
             # coverage 0
@@ -1129,7 +1097,7 @@ class Model(object):
                                 '-Wno-unused-variable -w -fopenmp" ' 
                                 '-lsundials_fcvode '
                                 '-lsundials_cvode -lsundials_fnvecopenmp '
-                                '-lsundials_nvecopenmp -lmkl_rt -lgomp ' +
+                                '-lsundials_nvecopenmp -lopenblas_openmp -lgomp ' +
                                 os.path.join(dname, pyfname),
                      source_fn=os.path.join(dname, fname), verbose=0)
 
