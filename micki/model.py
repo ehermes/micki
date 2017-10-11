@@ -218,6 +218,11 @@ class Reaction(object):
             dGf = Gts - Gr + dEr
             dGr = Gts - Gp + dEp
 
+            if dGf < 0:
+                raise RuntimeError('Reaction {} has negative forwards activation barrier!'.format(self))
+            if dGr < 0:
+                raise RuntimeError('Reaction {} has negative reverse activation barrier!'.format(self))
+
             all_symbols = set()
             all_symbols.update(sym.sympify(dEr).atoms(sym.Symbol))
             all_symbols.update(sym.sympify(dEp).atoms(sym.Symbol))
@@ -227,11 +232,13 @@ class Reaction(object):
             else:
                 a1 = (2*dEp - 2*dEr - dGf - dGr - sym.sqrt(8*(dEp-dEr)*dGf + (-2*dEp + 2*dEr + dGf + dGr)**2))/(4*(dEp-dEr))
                 a1 = sym.sympify(a1).subs({symbol: 0 for symbol in all_symbols})
-                if 0. <= a1 <= 1:
+                if isinstance(a1, sym.Float) and 0. <= a1 <= 1:
                     self.alpha = a1
                 else:
                     a2 = (2*dEp - 2*dEr - dGf - dGr + sym.sqrt(8*(dEp-dEr)*dGf + (-2*dEp + 2*dEr + dGf + dGr)**2))/(4*(dEp-dEr))
                     self.alpha = sym.sympify(a2).subs({symbol: 0 for symbol in all_symbols})
+                    if not isinstance(self.alpha, sym.Float) or not (0. <= self.alpha <= 1.):
+                        raise RuntimeError("Couldn't find alpha parameter for {}!".format(self))
 
             self.dH_act = self.ts.get_H(T) + (1 - self.alpha) * dEr + self.alpha * dEp - self.reactants.get_H(T)
             self.dH_act *= self.scale['dH_act']
@@ -1095,8 +1102,9 @@ class Model(object):
                      extra_args='--quiet '
                                 '--f90flags="-Wno-unused-dummy-argument '
                                 '-Wno-unused-variable -w -fopenmp" ' 
-                                '-lsundials_fcvode '
-                                '-lsundials_cvode -lsundials_fnvecopenmp '
+                                '-lsundials_fida '
+                                '-lsundials_fnvecopenmp '
+                                '-lsundials_ida '
                                 '-lsundials_nvecopenmp -lopenblas_openmp -lgomp ' +
                                 os.path.join(dname, pyfname),
                      source_fn=os.path.join(dname, fname), verbose=0)
