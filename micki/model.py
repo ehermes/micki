@@ -420,7 +420,7 @@ class Reaction(object):
 
 
 class Model(object):
-    def __init__(self, T, Asite, z=0, nz=0, shape='FLAT', lattice=None):
+    def __init__(self, T, Asite, z=0, lattice=None):
         self.reactions = OrderedDict()
         self._reactions = []
         self._species = []
@@ -435,20 +435,7 @@ class Model(object):
         self.T = T  # System temperature
         self.Asite = Asite  # Area of adsorption site
         self._z = z  # Diffusion length
-        self.nz = nz  # Number of diffusion grid points
-        self.shape = shape  # Distribution of diffusion grid points
         self.lattice = lattice
-
-    def check_diffusion(self):
-        # Do we need to consider diffusion?
-        self.diffusion = False
-        self.V = 1
-        if self.nz > 0:  # No numerical diffusion if there is only one grid point
-            if self.z <= 0:
-                raise ValueError('Must specify boundary layer thickness for'
-                                 'diffusion!')
-            self.diffusion = True
-            self.V = _Nav * self.Asite * self.z * 2000
 
     def add_reactions(self, reactions):
         # Set up list of reactions and species
@@ -541,17 +528,6 @@ class Model(object):
 
     z = property(get_z, set_z, doc='Diffusion length')
 
-    def set_nz(self, nz):
-        self._nz = nz
-        self.check_diffusion()
-        if self.U0 is not None:
-            self.set_initial_conditions(self.U0)
-
-    def get_nz(self):
-        return self._nz
-
-    nz = property(get_nz, set_nz, doc='Number of diffusion grid points')
-
     def set_lattice(self, lattice):
         if isinstance(lattice, Lattice) or lattice is None:
             self._lattice = lattice
@@ -569,13 +545,6 @@ class Model(object):
 
     lattice = property(get_lattice, set_lattice, doc='Model lattice')
 
-    def set_up_grid(self):
-        if self.shape.upper() != 'FLAT':
-            raise NotImplementedError
-        self.dz = self.z / self.nz
-        self.dV = _Nav * self.Asite * self.dz * 1000
-        assert self.V - self.dV * self.nz > 0, "Quiescent layer is too thick!"
-
     def set_initial_conditions(self, U0):
         if self.initialized:
             self.finalize()
@@ -586,12 +555,6 @@ class Model(object):
         self.nliquid = 0
         for species in self._species:
             if isinstance(species, Liquid):
-                # As long as we are reordering the system, check to ensure all
-                # Liquid species have a diffusion constant if we are doing
-                # diffusion
-                if self.diffusion:
-                    assert species.D is not None, \
-                        "Specify diffusion constant for {}".format(species)
                 newspecies.append(species)
                 self.nliquid += 1
         for species in self._species:
@@ -601,10 +564,6 @@ class Model(object):
             if isinstance(species, Adsorbate):
                 newspecies.append(species)
         self._species = newspecies
-
-        # Set up diffusion grid, if necessary
-        if self.diffusion:
-            self.set_up_grid()
 
         # Start with the incomplete user-provided initial conditions
         self.U0 = U0.copy()
@@ -621,15 +580,12 @@ class Model(object):
                         break
                 else:
                     raise ValueError('Species {} is unknown!'.format(name))
+
             # Ignore all initial conditions for the number of empty sites
             if species in self.vacancy:
                 warnings.warn('Initial condition for vacancy concentration '
                               'ignored.', RuntimeWarning, stacklevel=2)
                 continue
-
-            # Tuple implies we're talking about a diffusive liquid species
-            if type(species) is tuple:
-                species = species[0]
 
             # Throw an error if the user provides the concentration for a
             # species we don't know about
@@ -641,15 +597,6 @@ class Model(object):
             if species.sites is not None:
                 for site in species.sites:
                     occsites[site] += self.U0[name]
-
-            # If we're specifying a Liquid concentration with diffusion
-            # enabled, U0[species]
-            # must equal U0[(species, nz-1)]
-            if self.diffusion and isinstance(species, Liquid):
-                if (species, self.nz - 1) in self.U0:
-                    assert abs(self.U0[name] -
-                               self.U0[(name, self.nz - 1)]) < 1e-6, \
-                               "Liquid concentrations not consistent!"
 
         self.vactot = {}
         # Determine what the initial vacancy concentration should be
@@ -680,29 +627,10 @@ class Model(object):
             # Assume concentration of unnamed species is 0
             if name not in self.U0:
                 self.U0[name] = 0.
-            # If we are doing diffusion, liquid species should have initial
-            # concentrations for ALL diffusion grid points. We will assume a
-            # flat concentration profile initially at the user specified
-            # bulk concentration (or 0 if the user didn't specify anything)
-            if self.diffusion and isinstance(species, Liquid):
-                U0i = self.U0[name]
-                if species.label != self.solvent:
-                    for i in range(self.nz):
-                        # The user can also specify concentration at individual
-                        # grid points
-                        if (name, i) not in self.U0:
-                            self.U0[(name, i)] = U0i
-                        else:
-                            U0i = self.U0[(name, i)]
 
         # The number of variables that will be in our differential equations
         size = len(self._species)
-        # Each diffusion grid point adds nliquid variables
-        if self.diffusion:
-            size += (self.nz - 1) * self.nliquid
-            # If the solvent is a liquid, don't count it
-            if self.solvent is not None:
-                size -= self.nz - 1
+
         # Initialize "mass matrix", which is a diagonal matrix with 1s for
         # differential elements and 0s for algebraic elements (steady-state)
         M = np.ones(size, dtype=int)
@@ -720,20 +648,8 @@ class Model(object):
         for species in self._species:
             self.symbols_all.append(species.symbol)
             self.symbols_dict[species] = species.symbol
-            if self.diffusion and isinstance(species, Liquid):
-                if species.label == self.solvent:
-                    continue
-                self.symbols_dict[(species, self.nz - 1)] = species.symbol
-                for j in range(self.nz - 1):
-                    newsymbol = sym.Symbol(str(species.symbol) + str(j).zfill(3))
-                    self.symbols_all.append(newsymbol)
-                    self.symbols_dict[(species, j)] = newsymbol
-                    self.symbols.append(newsymbol)
-                if species.label not in self.fixed:
-                    self.symbols.append(species.symbol)
-            else:
-                if species.label not in self.fixed and species.label != self.solvent:
-                    self.symbols.append(species.symbol)
+            if species.label not in self.fixed and species.label != self.solvent:
+                self.symbols.append(species.symbol)
 
         # subs converts a species symbol to either its initial value if
         # it is fixed or to a constraint (such as constraining the total
@@ -774,53 +690,15 @@ class Model(object):
         # f_sym is the SYMBOLIC master equation for all species
         self.f_sym = []
 
+        # TODO: Convert this to a matrix multiplication
         for species in self._species:
             f = 0
             # DETAILED BALANCE NOTE: See discussion in _rate_init
-            if self.diffusion and isinstance(species, Liquid) \
-                    and species.label != self.solvent:
-                for i in range(self.nz):
-                    if i == self.nz - 1 and species.label in self.fixed:
-                        continue
-                    f = 0
-                    # At each grid point, add all-liquid reaction rates
-                    for j, rate in enumerate(self.rates):
-                        f += self.rate_count[j][(species, i)] * rate
-                    diff = species.D / self.dz
-                    # For all grid points except the first, add diffusion away
-                    # from the surface
-                    if i > 0:
-                        f += diff * (self.symbols_dict[(species, i-1)] -
-                                     self.symbols_dict[(species, i)]) \
-                                             / self.dz
-                    # For all grid points except the last, add diffusion
-                    # towards the surface
-                    if i < self.nz - 1:
-                        f += diff * (self.symbols_dict[(species, i+1)] -
-                                     self.symbols_dict[(species, i)]) \
-                                             / self.dz
-                    # At the surface, account for any adsorption reactions
-                    if i == 0:
-                        for j, rate in enumerate(self.rates):
-                            if self.is_rate_ads[j]:
-                                f += self.rate_count[j][species] * rate * \
-                                        self.V / self.dV
-                    # If we were looking at the last grid point and the species
-                    # is fixed, discard what we just calculated
+            if species.label not in self.fixed:
+                if species not in self.vacancy and species.label != self.solvent:
+                    for i, rate in enumerate(self.rates):
+                        f += self.rate_count[i][species] * rate
                     self.f_sym.append(f)
-                else:
-                    # This is necessary to avoid double-counting non-fixed
-                    # liquid species. continue skips the below "if" statement
-                    continue
-            elif species not in self.vacancy and species.label not in self.fixed:
-                # Reactions involving on-surface species
-                for i, rate in enumerate(self.rates):
-                    f += self.rate_count[i][species] * rate
-            # Discard rates for fixed species
-            if species.label not in self.fixed and species.label != self.solvent:
-                self.f_sym.append(f)
-            else:
-                assert f == 0, "Fixed species rate of change not zero!"
 
         # subs is a dictionary whose keys are internal species symbols and
         # whose values are the initial concentrations of that species if it
@@ -839,16 +717,8 @@ class Model(object):
         # initial values.
         for species in self._species:
             if species.label in self.fixed or species.label == self.solvent:
-                liquid = False
                 label = species.label
-                if self.diffusion and isinstance(species, Liquid) \
-                        and species.label != self.solvent:
-                    label = (species.label, self.nz - 1)
-                    liquid = True
-                U0i = self.U0[label]
-                if liquid or isinstance(species, _Fluid):
-                    U0i *= self.V
-                subs[species.symbol] = U0i
+                subs[species.symbol] = self.U0[label]
 
         # sym.sympify ensures that subs will not fail (if the expression has no
         # sympy symbols in it, this would normally fail)
@@ -876,14 +746,7 @@ class Model(object):
         for symbol in self.symbols:
             for species, isymbol in self.symbols_dict.items():
                 if symbol == isymbol:
-                    if isinstance(species, tuple):
-                        U0i = self.U0[(species[0].label, species[1])]
-                    else:
-                        U0i = self.U0[species.label]
-                    if type(species) is tuple \
-                            or isinstance(species, _Fluid):
-                        U0i *= self.V
-                    U0.append(U0i)
+                    U0.append(self.U0[species.label])
                     break
 
         # Pass initial values to the fortran module
@@ -903,30 +766,8 @@ class Model(object):
 
         for reaction in self._reactions:
             # Calculate kfor, krev, and keq
-            # If we are diffusing and the species is a liquid, the diffusion
-            # length is the distance to the first grid point, NOT the overall
-            # stationary layer thickness.
-            liquid_diffusion = False
-            if self.diffusion:
-                for species in reaction.reactants:
-                    if isinstance(species, Liquid):
-                        liquid_diffusion = True
-                        break
-            if liquid_diffusion:
-                rate_for = reaction.get_kfor(self.T, self.Asite, self.dz/2.)
-                rate_rev = reaction.get_krev(self.T, self.Asite, self.dz/2.)
-            else:
-                rate_for = reaction.get_kfor(self.T, self.Asite, self.z)
-                rate_rev = reaction.get_krev(self.T, self.Asite, self.z)
-
-            # For adsorption reactions, scale the rate by the concentration
-            # of catalytic sites (normally 1 for reactions without diffusion)
-            if reaction.method in ['CT', 'ER', 'DIFF']:
-                rate_for /= self.V
-            # For reactions entirely in solution, scale rate by volume
-            elif reaction.Nfluid != 0:
-                rate_for *= self.V**(-reaction.Nreact_fluid + 1)
-                rate_rev *= self.V**(-reaction.Nprod_fluid + 1)
+            rate_for = reaction.get_kfor(self.T, self.Asite, self.z)
+            rate_rev = reaction.get_krev(self.T, self.Asite, self.z)
 
             # IMPORTANT NOTE PERTAINING TO ABOVE:
             # As far as the user can tell, all fluids (Gas, Liquid) are
@@ -945,9 +786,6 @@ class Model(object):
             rate_count = {}
             for species in self._species:
                 rate_count[species] = 0
-                if self.diffusion and isinstance(species, Liquid):
-                    for i in range(self.nz):
-                        rate_count[(species, i)] = 0
             for vacancy in self.vacancy:
                 rate_count[vacancy] = 0
 
@@ -971,40 +809,10 @@ class Model(object):
             if reaction.reversible:
                 rate -= rate_rev
 
-            # For adsorption reactions, scale rates by the volume of the
-            # first layer
-            if reaction.adsorption and self.diffusion:
-                rate *= self.dV / self.V
-
             # Append all data to global rate lists
             self.rates.append(rate)
             self.rate_count.append(rate_count)
             self.is_rate_ads.append(reaction.adsorption)
-
-            # If a reaction is occuring between all liquid species, then we
-            # have to perform the same reaction at all grid points. This is
-            # an exact mirror of what occurred above, but at different grid
-            # points.
-            if self.diffusion and reaction.all_liquid:
-                for i in range(self.nz - 1):
-                    new_rate_count = {}
-                    for species in self._species:
-                        new_rate_count[species] = 0
-                        if isinstance(species, Liquid):
-                            for j in range(self.nz):
-                                new_rate_count[(species, j)] = 0
-                    subs = {}
-                    for species in self._species:
-                        if isinstance(species, Liquid) \
-                                and species.label != self.solvent:
-                            new_rate_count[(species, i)] = rate_count[species]
-                            subs[self.symbols_dict[species]] = \
-                                self.symbols_dict[(species, i)]
-
-                    self.rates.append(rate.subs(subs))
-                    self.rate_count.append(new_rate_count)
-                    # This should always be False:
-                    self.is_rate_ads.append(reaction.adsorption)
 
     def setup_execs(self):
         from micki.fortran import f90_template, pyf_template
@@ -1126,9 +934,6 @@ class Model(object):
         if self.solvent is not None:
             fixed += [self.solvent]
         for name in fixed:
-            if self.diffusion and isinstance(self.species[name], Liquid) \
-                    and name != self.solvent:
-                name = (name, self.nz - 1)
             dUi[name] = 0.
             Ui[name] = self.U0[name]
         for j, symbol in enumerate(self.symbols):
@@ -1140,14 +945,8 @@ class Model(object):
                     else:
                         label = species.label
 
-                    Uij = U[j]
-                    dUij = dU[j]
-                    if isinstance(species, _Fluid):
-                        Uij /= self.V
-                        dUij /= self.V
-
-                    Ui[label] = Uij
-                    dUi[label] = dUij
+                    Ui[label] = U[j]
+                    dUi[label] = dU[j]
         for vacancy in self.vacancy:
             Ui[vacancy.label] = self.vactot[vacancy]
             for species in self.vacspecies[vacancy]:
@@ -1161,10 +960,6 @@ class Model(object):
         for reaction in self._reactions:
             ri[rxn_to_name[reaction]] = r[j]
             j += 1
-            if self.diffusion and reaction.all_liquid:
-                for i in range(self.nz - 1):
-                    ri[(rxn_to_name[reaction], i)] = r[j]
-                    j += 1
 
         return Ui, dUi, ri
 
