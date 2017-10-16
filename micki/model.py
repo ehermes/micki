@@ -552,11 +552,9 @@ class Model(object):
         # Reorder species such that Liquid -> Gas -> Adsorbate -> Vacancy
         # Steady-state species go to the end.
         newspecies = []
-        self.nliquid = 0
         for species in self._species:
             if isinstance(species, Liquid):
                 newspecies.append(species)
-                self.nliquid += 1
         for species in self._species:
             if isinstance(species, (Gas, Electron)):
                 newspecies.append(species)
@@ -939,14 +937,8 @@ class Model(object):
         for j, symbol in enumerate(self.symbols):
             for species, isymbol in self.symbols_dict.items():
                 if symbol == isymbol:
-                    if type(species) is tuple:
-                        label = (species[0].label, species[1])
-                        species = species[0]
-                    else:
-                        label = species.label
-
-                    Ui[label] = U[j]
-                    dUi[label] = dU[j]
+                    Ui[species.label] = U[j]
+                    dUi[species.label] = dU[j]
         for vacancy in self.vacancy:
             Ui[vacancy.label] = self.vactot[vacancy]
             for species in self.vacspecies[vacancy]:
