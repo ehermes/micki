@@ -445,7 +445,7 @@ class Adsorbate(_Thermo):
         self.E['tot'] = self.E['elec'] + self.E['vib']
         self.H = self.E['tot']
         self.S['tot'] = self.S['elec'] + self.S['vib']
-        self.S['tot'] -= kB * np.log(self.symm)
+        self.S['tot'] += kB * np.log(self.symm)
         if self.lattice is not None:
             self.S['tot'] += self.lattice.get_S_conf(self.sites)
 
