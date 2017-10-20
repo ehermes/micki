@@ -3,17 +3,20 @@ f90_template = """module solve_ida
    implicit none
 
    integer :: neq = {neq}
-   integer :: iout(25)
-   real*8 :: rout(10)
+   integer :: iout(50)
+   real*8 :: rout(50)
    real*8 :: y0({neq}), yp0({neq})
    real*8 :: diff({neq}), mas({neq}, {neq})
    real*8 :: jac({neq}, {neq})
+   real*8 :: rates({nrates})
+   integer :: dypdr({neq}, {nrates})
+   integer :: dvacdy({nvac}, {neq})
 
 end module solve_ida
 
 subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
 
-   use solve_ida, only: neq, iout, rout, y0, yp0, mas, diff
+   use solve_ida, only: neq, iout, rout, y0, yp0, mas, diff, dypdr, dvacdy
 
    implicit none
 
@@ -28,6 +31,12 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    integer :: meth, itmeth
    integer, external :: OMP_GET_NUM_THREADS, OMP_GET_THREAD_NUM
    integer :: myid
+
+   dypdr = 0
+{dypdrcalc}
+
+   dvacdy = 0
+{dvacdycalc}
 
    iatol = 2
    constr_vec = 1.d0
@@ -53,11 +62,11 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    enddo
 
 !   ! Calculate yp
-   call fcvfun(0.d0, y0, yp0, ipar, rpar, ier)
+   call fidaresfun(0.d0, y0, yptmp, yp0, ipar, rpar, ier)
 
    ! initialize Sundials
-   !call fnvinits(1, neq, ier)
-   call fnvinitomp(2, neq, nthreads, ier)
+   call fnvinits(2, neq, ier)
+   !call fnvinitomp(2, neq, nthreads, ier)
    ! allocate memory
    call fidamalloc(t0, y0, yp0, iatol, rtol, atol, iout, rout, ipar, rpar, ier)
 ! TODO: Fix all of these settings
@@ -66,27 +75,27 @@ subroutine initialize(neqin, y0in, rtol, atol, ipar, rpar, id_vec)
    ! set algebraic variables
    call fidasetvin('ID_VEC', id_vec, ier)
    ! set constraints (all yi >= 0.)
-!   call fidasetvin('CONSTR_VEC', constr_vec, ier)
-   ! enable stability limit detection
+   call fidasetvin('CONSTR_VEC', constr_vec, ier)
+!   ! enable stability limit detection
 !   call fidasetiin('STAB_LIM', 1, ier)
    ! initialize the solver
    call fidalapackdense(neq, ier)
    ! enable the jacobian
    call fidalapackdensesetjac(1, ier)
 !   ! initialize the solver
-!!   call fcvspgmr(2, 2, 0, 0, ier)
-!!   call fcvspbcg(0, 0, 0, ier)
-!   call fcvsptfqmr(0, 0, 0, ier)
+!   call fidaspgmr(0, 0, 10, 0.05d0, 1.0d0, ier)
+!!   call fidaspbcg(0, 0.05d0, 1.0d0, ier)
+!!   call fidasptfqmr(0, 0.05d0, 1.0d0, ier)
 !   ! enable the jacobian
-!   call fcvspilssetjac(1, ier)
+!   call fidaspilssetjac(1, ier)
 !   ! enable the preconditioner
-!   call fcvspilssetprec(1, ier)
+!   call fidaspilssetprec(1, ier)
 
 end subroutine initialize
 
 subroutine find_steady_state(neqin, nrates, dt, maxiter, epsilon, t1, u1, du1, r1)
 
-   use solve_ida, only: y0, yp0, iout, rout
+   use solve_ida, only: y0, yp0, iout, rout, rates, dypdr
 
    implicit none
 
@@ -99,6 +108,7 @@ subroutine find_steady_state(neqin, nrates, dt, maxiter, epsilon, t1, u1, du1, r
    real*8, intent(out) :: t1, u1(neqin), du1(neqin), r1(nrates)
 
    real*8 :: tout, epsilon2
+   real*8 :: dutmp(neqin), du0(neqin)
    integer :: itask, ier
    integer :: i
 
@@ -111,15 +121,24 @@ subroutine find_steady_state(neqin, nrates, dt, maxiter, epsilon, t1, u1, du1, r
    u1 = y0
    du1 = yp0
    t1 = 0.d0
+   du0 = 0.d0
+
+   call fidacalcic(1, dt, ier)
 
    do while (.not. converged)
       if (tout - t1 < dt * 0.01) then
          tout = tout + dt
       end if
+
       call fidasolve(tout, t1, u1, du1, itask, ier)
+
       i = i + 1
-      if (maxval(du1**2) < epsilon2) then
+
+      call fidaresfun(tout, u1, du0, dutmp, ipar, rpar, ier)
+
+      if (maxval(dutmp**2) < epsilon2) then
          converged = .TRUE.
+         print *, dutmp, du1
       end if
       if (i >= maxiter) then
          print *, "ODE NOT CONVERGED!"
@@ -127,13 +146,14 @@ subroutine find_steady_state(neqin, nrates, dt, maxiter, epsilon, t1, u1, du1, r
       end if
    end do
    
-   call ratecalc({neq}, {nrates}, u1, r1)
+   call ratecalc({neq}, u1)
+   r1 = rates
 
 end subroutine find_steady_state
 
 subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
 
-   use solve_ida, only: y0, yp0, iout, rout
+   use solve_ida, only: y0, yp0, iout, rout, rates
 
    implicit none
 
@@ -159,25 +179,23 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    u1(:, 1) = y0
    du1(:, 1) = yp0
    t1(1) = 0.d0
-   call ratecalc({neq}, {nrates}, u1(:, 1), r1(:, 1))
+   call ratecalc({neq}, u1(:, 1))
+   r1(:, 1) = rates
+
+
+   call fidacalcic(1, dt, ier)
 
    do i = 2, nt
       tout = tout + dt
       do while (tout - t1(i) > dt * 0.01)
          call fidasolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
-         print *, u1(:, i)
-!         call fcvsolve(tout, t1(i), u1(:, i), du1(:, i), itask, ier)
-!         print *, "Target time:", tout
-!         print *, "Actual time:", t1(i)
       end do
-      call ratecalc({neq}, {nrates}, u1(:, i), r1(:, i))
+      r1(:, i) = rates
    end do
 
 end subroutine solve
 
 subroutine finalize
-
-!   use solve_ida, only: y0, yp0, jac, mas, diff
 
    implicit none
 
@@ -185,30 +203,9 @@ subroutine finalize
 
 end subroutine finalize
 
-subroutine fcvfun(tres, yin, res, ipar, rpar, reserr)
-
-   use solve_ida, only: neq
-
-   implicit none
-
-   integer, intent(in) :: ipar(*)
-   integer, intent(out) :: reserr
-   real*8, intent(in) :: tres, rpar(*)
-   real*8, intent(in) :: yin(neq)
-   real*8, intent(out) :: res(neq)
-   real*8 :: x({nx})
-
-   res = 0
-
-{rescalc}
-
-   reserr = 0
-
-end subroutine fcvfun
-
 subroutine fidaresfun(tres, yin, ypin, res, ipar, rpar, reserr)
 
-   use solve_ida, only: neq, diff
+   use solve_ida, only: neq, diff, dypdr, rates
 
    implicit none
 
@@ -217,38 +214,32 @@ subroutine fidaresfun(tres, yin, ypin, res, ipar, rpar, reserr)
    real*8, intent(in) :: tres, rpar(*)
    real*8, intent(in) :: yin(neq), ypin(neq)
    real*8, intent(out) :: res(neq)
-   real*8 :: x({nx})
+   real*8 :: y(neq)
 
+   integer :: i
+
+   reserr = 0
+
+   y = yin
    res = 0
 
-{rescalc}
 
-   res = res - diff * ypin
+   do i = 1, neq
+      if (y(i) < -1d-10)  then
+!         y(i) = 0.d0
+         reserr = 1
+      endif
+   enddo
 
+   call ratecalc({neq}, y)
+
+   res = matmul(dypdr, rates) - diff * ypin
+   
 end subroutine fidaresfun
-
-subroutine fcvdjac(neqin, t, yin, ypin, jac, h, &
-                    ipar, rpar, wk1, wk2, wk3, djacerr)
-
-   implicit none
-
-   integer :: neqin, ipar(*)
-   integer :: djacerr
-   real*8 :: t, h, rpar(*)
-   real*8 :: yin(neqin), ypin(neqin), jac(neqin, neqin)
-   real*8 :: wk1(*), wk2(*), wk3(*)
-
-   jac = 0
-
-{jaccalc}
-
-   djacerr = 0
-
-end subroutine fcvdjac
 
 subroutine fidadjac(neqin, t, yin, ypin, r, jac, cj, ewt, h, ipar, rpar, wk1, wk2, wk3, djacerr)
 
-   use solve_ida, only: mas
+   use solve_ida, only: mas, dypdr, dvacdy
     
    implicit none
    
@@ -257,111 +248,139 @@ subroutine fidadjac(neqin, t, yin, ypin, r, jac, cj, ewt, h, ipar, rpar, wk1, wk
    real*8 :: t, h, cj, rpar(*)
    real*8 :: yin(neqin), ypin(neqin), r(neqin), ewt(*), jac(neqin, neqin)
    real*8 :: wk1(*), wk2(*), wk3(*)
+   real*8 :: y(neqin), drdy({nrates}, {neq}), drdvac({nrates}, {nvac}), vac({nvac})
 
-   jac = 0
-
-{jaccalc}
-
-   jac = jac - cj * mas
+   integer :: i
 
    djacerr = 0
 
+   jac = 0
+   y = yin
+
+   do i = 1, neqin
+      if (y(i) < -1d-10) then
+         y(i) = 0.d0
+         djacerr = 1
+      endif
+   enddo
+
+   vac = 0
+{vaccalc}
+
+   do i = 1, {nvac}
+      if (vac(i) < -1d-10) then
+         vac(i) = 0.d0
+         djacerr = 1
+      endif
+   enddo
+
+   drdy = 0
+{drdycalc}
+
+   drdvac = 0
+{drdvaccalc}
+
+   drdy = drdy + matmul(drdvac, dvacdy)
+
+   jac = matmul(dypdr, drdy) - cj * mas
+
 end subroutine fidadjac
 
-subroutine ratecalc(neqin, nrates, yin, rates)
+subroutine ratecalc(neqin, yin)
+
+   use solve_ida, only: rates
 
    implicit none
 
-   integer, intent(in) :: neqin, nrates
+   integer, intent(in) :: neqin
    real*8, intent(in) :: yin(neqin)
-   real*8, intent(out) :: rates(nrates)
+   real*8 :: y(neqin)
+   real*8 :: vac({nvac})
+
+   integer :: i
+
+   y = yin
+
+
+   vac = 0
+{vaccalc}
+
+   do i = 1, {nvac}
+      if (vac(i) < -1d-10) then
+         vac(i) = 0.d0
+         print *, vac
+      endif
+   enddo
 
    rates = 0
-
 {ratecalc}
 
 end subroutine ratecalc
 
-subroutine fcvjtimes(vin, fjv, tres, yin, res, h, ipar, rpar, wk1, ier)
+subroutine fidajtimes(tres, yin, ypin, res, vin, fjv, cj, ewt, h, ipar, rpar, wk1, wk2, ier)
 
-   use solve_ida, only: neq, jac
+   use solve_ida, only: neq
 
    implicit none
 
-   real*8, intent(in) :: tres, yin(neq), res(neq), vin(neq), h
-   real*8 :: wk1(*), rpar(*)
+   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq), vin(neq), cj, h
+   real*8 :: ewt(*), wk1(*), wk2(*), rpar(*), wk3(1)
    integer :: ipar(*)
    integer :: i
 
    real*8, intent(out) :: fjv(neq)
    integer, intent(out) :: ier
 
-!   real*8 :: jac(neq, neq)
-!
-!   call fcvdjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, &
-!                    ipar, rpar, wk1, wk2, wk2, ier)
+   real*8 :: jac(neq, neq)
 
-   do i = 1, neq
-   fjv(i) = dot_product(vin, jac(i, :))
-   enddo
+   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, ipar, rpar, wk1, wk2, wk2, ier)
 
-   ier = 0
+   fjv = 0.d0
 
-end subroutine fcvjtimes
+   call dgemv('N', neq, neq, 1.d0, jac, neq, vin, 1, 0.d0, fjv, 1)
 
-subroutine fcvpsol(tres, yin, res, rvin, zv, cj, delta, lr, ipar, rpar, wk1, ier)
+end subroutine fidajtimes
+
+subroutine fidapsol(tres, yin, ypin, res, rvin, zv, cj, delta, ewt, ipar, rpar, wk1, ier)
 
    use solve_ida, only: neq, jac
 
    implicit none
 
-   real*8, intent(in) :: tres, yin(neq), res(neq), rvin(neq)
-   real*8, intent(in) :: cj, delta, rpar(*)
-   integer, intent(in) :: ipar(*), lr
+   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq), rvin(neq)
+   real*8, intent(in) :: cj, delta, ewt(*), rpar(*)
+   integer, intent(in) :: ipar(*)
 
    real*8 :: wk1(*)
    integer :: ier
 
    real*8, intent(out) :: zv(neq)
 
-   real*8 :: precon(neq, neq)
    integer :: ipiv(neq)
    integer :: i
 
-   precon = -cj * jac
-   do i = 1, neq
-      precon(i, i) = precon(i, i) + 1
-   end do
-!   call fcvdjac(neq, tres, yin, ypin, res, jaclu, cj, ewt, 1, &
-!                    ipar, rpar, wk1, wk1, wk1, ier)
-
    zv = rvin
-   call dgesv(neq, 1, precon, neq, ipiv, zv, neq, ier)
+   call dgesv(neq, 1, jac, neq, ipiv, zv, neq, ier)
 
-end subroutine fcvpsol
+end subroutine fidapsol
 
-subroutine fcvpset(tres, yin, res, jok, jcur, cj, h, ipar, rpar, wk1, wk2, wk3, ier)
+subroutine fidapset(tres, yin, ypin, res, cj, ewt, h, ipar, rpar, wk1, wk2, wk3, ier)
 
    use solve_ida, only: neq, jac
 
    implicit none
 
-   real*8, intent(in) :: tres, yin(neq), res(neq)
-   real*8, intent(in) :: cj, h, rpar(*)
+   real*8, intent(in) :: tres, yin(neq), ypin(neq), res(neq)
+   real*8, intent(in) :: cj, ewt(*), h, rpar(*)
    real*8 :: wk1(*), wk2(*), wk3(*)
 
-   integer, intent(in) :: ipar(*), jok
+   integer, intent(in) :: ipar(*)
 
-   integer, intent(out) :: ier, jcur
+   integer, intent(out) :: ier
 
-   jcur = 1
-   if (jok == 0) then
-      call fcvdjac(neq, tres, yin, res, jac, h, &
-                   ipar, rpar, wk1, wk2, wk3, ier)
-      jcur = 0
-   end if
+   call fidadjac(neq, tres, yin, ypin, res, jac, cj, ewt, h, ipar, rpar, wk1, wk2, wk3, ier)
 
-end subroutine fcvpset
+end subroutine fidapset
 
    """
 
@@ -372,16 +391,20 @@ pyf_template = """!    -*- f90 -*-
 python module {modname} ! in
     interface  ! in :{modname}
         module solve_ida ! in :{modname}:{modname}.f90
-            real*8 dimension({neq}) :: yp0
-            real*8 dimension(10) :: rout
-            integer dimension(25) :: iout
-            real*8 dimension({neq},{neq}) :: mas
+            integer dimension(50) :: iout
+            real*8 dimension(50) :: rout
             real*8 dimension({neq}) :: y0
+            real*8 dimension({neq}) :: yp0
             real*8 dimension({neq}) :: diff
+            real*8 dimension({neq},{neq}) :: mas
+            real*8 dimension({neq},{neq}) :: jac
+            real*8 dimension({nrates}) :: rates
+            integer dimension({neq},{nrates}) :: dypdr
+            integer dimension({nvac},{neq}) :: dvacdy
             integer, optional :: neq={neq}
         end module solve_ida
         subroutine initialize(neqin,y0in,rtol,atol,ipar,rpar,id_vec) ! in :{modname}:{modname}.f90
-            use solve_ida, only: mas,rout,iout,yp0,diff,y0,neq
+            use solve_ida, only: neq,iout,rout,y0,yp0,mas,diff,dypdr,dvacdy
             integer, optional,intent(in),check(len(y0in)>=neqin),depend(y0in) :: neqin=len(y0in)
             real*8 dimension(neqin),intent(in) :: y0in
             real*8 intent(in) :: rtol
@@ -391,7 +414,7 @@ python module {modname} ! in
             real*8 dimension(neqin),intent(in),depend(neqin) :: id_vec
         end subroutine initialize
         subroutine find_steady_state(neqin,nrates,dt,maxiter,epsilon,t1,u1,du1,r1) ! in :{modname}:{modname}.f90
-            use solve_ida, only: y0,yp0,iout,rout
+            use solve_ida, only: y0,yp0,iout,rout,rates,dypdr
             integer intent(in) :: neqin
             integer intent(in) :: nrates
             real*8 intent(in) :: dt
@@ -403,7 +426,7 @@ python module {modname} ! in
             real*8 intent(out),dimension(nrates),depend(nrates) :: r1
         end subroutine find_steady_state
         subroutine solve(neqin,nrates,nt,tfinal,t1,u1,du1,r1) ! in :{modname}:{modname}.f90
-            use solve_ida, only: y0,yp0,neq
+            use solve_ida, only: y0,yp0,iout,rout,rates
             integer intent(in) :: neqin
             integer intent(in) :: nrates
             integer intent(in) :: nt
@@ -414,7 +437,6 @@ python module {modname} ! in
             real*8 intent(out),dimension(nrates,nt),depend(nrates,nt) :: r1
         end subroutine solve
         subroutine finalize ! in :{modname}:{modname}.f90
-            use solve_ida, only: mas,y0,yp0,diff
         end subroutine finalize
     end interface
 end python module {modname}

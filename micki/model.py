@@ -427,7 +427,7 @@ class Reaction(object):
 
 
 class Model(object):
-    def __init__(self, T, Asite, z=0, lattice=None):
+    def __init__(self, T, Asite, z=0, lattice=None, reactor='CSTR'):
         self.reactions = OrderedDict()
         self._reactions = []
         self._species = []
@@ -443,6 +443,7 @@ class Model(object):
         self.Asite = Asite  # Area of adsorption site
         self._z = z  # Diffusion length
         self.lattice = lattice
+        self.reactor = reactor
 
     def add_reactions(self, reactions):
         # Set up list of reactions and species
@@ -612,24 +613,27 @@ class Model(object):
                 for site in species.sites:
                     occsites[site] += self.U0[name]
 
+        self.dvacdy = np.zeros((len(self.vacancy), self.nvariables), dtype=int)
         self.vactot = {}
         # Determine what the initial vacancy concentration should be
-        for species in self.vacancy:
-            name = species.label
+        for i, vac in enumerate(self.vacancy):
+            name = vac.label
             # If a vacancy species is part of the lattice, get its maximum
             # concentration from its relative abundance. Otherwise, assume
             # it is 1.
-            if self.lattice is not None and species in self.lattice.sites:
-                self.vactot[species] = self.lattice.ratio[species]
+            if self.lattice is not None and vac in self.lattice.sites:
+                self.vactot[vac] = self.lattice.ratio[vac]
             else:
-                self.vactot[species] = 1.
+                self.vactot[vac] = 1.
             # Make sure there isn't too much stuff occupying each kind of
             # site on the surface.
-            assert occsites[species] <= self.vactot[species], \
-                    "Too many adsorbates on {}!".format(species)
+            assert occsites[vac] <= self.vactot[vac], \
+                    "Too many adsorbates on {}!".format(vac)
             # Normalize the concentration of empty sites to match the
             # appropriate site ratio from the lattice.
-            self.U0[name] = self.vactot[species] - occsites[species]
+            self.U0[name] = self.vactot[vac] - occsites[vac]
+            for j, species in enumerate(self._variable_species):
+                self.dvacdy[i, j] = -species.sites.count(vac)
 
         # Populate dictionary of initial conditions for all species
         for name, species in self.species.items():
@@ -660,14 +664,14 @@ class Model(object):
         # it is fixed or to a constraint (such as constraining the total
         # number of adsorption sites)
         subs = {}
-
+        
+        self.vac_sym = np.zeros(len(self.vacancy), dtype=object)
         # A vacancy will be represented by the total number of sites
         # minus the symbol of each species that occupies one of its sites.
-        for vacancy in self.vacancy:
-            vacsymbols = self.vactot[vacancy]
-            for species in self.vacspecies[vacancy]:
-                vacsymbols -= species.symbol
-            subs[vacancy.symbol] = vacsymbols
+        for i, vacancy in enumerate(self.vacancy):
+            self.vac_sym[i] = self.vactot[vacancy]
+            for species in self._species:
+                self.vac_sym[i] -= species.sites.count(vacancy) * species.symbol
 
         # known_symbols keeps track of user-provided symbols that the
         # model has seen, so that symbols referring to species not in
@@ -678,18 +682,22 @@ class Model(object):
 
         # Create the final mass matrix of the proper dimensions
         self.M = np.eye(self.nvariables, dtype=int)
+        
+        if self.reactor == 'PFR':
+            for i, species in enumerate(self._variable_species):
+                if isinstance(species, Adsorbate):
+                    self.M[i, i] = 0
+
         # algvar tells the solver which variables are differential
         # and which are algebraic. It is the diagonal of the mass matrix.
-        algvar = np.ones(self.nvariables, dtype=float)
-
-        # TODO: Make a way to set algebraic variables.
+        algvar = np.array(self.M.diagonal(), dtype=float)
 
         # Initialize all rate expressions based on the above symbols
         nrxns = len(self._reactions)
         # Array of symbolic rate expressions
         self.rates = np.zeros(nrxns, dtype=object)
         # Array of rate coefficients.
-        self.dfdr = np.zeros((self.nvariables, nrxns), dtype=int)
+        self.dypdr = np.zeros((self.nvariables, nrxns), dtype=int)
 
         for j, rxn in enumerate(self._reactions):
             rate_for = rxn.get_kfor(self.T, self.Asite, self.z)
@@ -698,7 +706,7 @@ class Model(object):
             for i, species in enumerate(self._variable_species):
                 rcount = rxn.reactants.species.count(species)
                 pcount = rxn.products.species.count(species)
-                self.dfdr[i, j] = -rcount + pcount
+                self.dypdr[i, j] = -rcount + pcount
 
             for species in self._species + self.vacancy:
                 rcount = rxn.reactants.species.count(species)
@@ -712,18 +720,12 @@ class Model(object):
             if rxn.reversible:
                 self.rates[j] -= rate_rev
 
-        # f_sym is the SYMBOLIC master equation for all species
-        self.f_sym = np.dot(self.dfdr, self.rates)
-
-        # subs is a dictionary whose keys are internal species symbols and
-        # whose values are the initial concentrations of that species if it
-        # is known, or 0 otherwise.
 
         # All symbols referring to unknown species are going to be replaced
         # by 0
         unknown_symbols = set()
-        for f in self.f_sym:
-            unknown_symbols.update(f.atoms(sym.Symbol))
+        for rate in self.rates:
+            unknown_symbols.update(rate.atoms(sym.Symbol))
         unknown_symbols -= known_symbols
         unknown_symbols -= set(self.symbols_all)
         subs.update({symbol: 0 for symbol in unknown_symbols})
@@ -735,22 +737,19 @@ class Model(object):
                 label = species.label
                 subs[species.symbol] = self.U0[label]
 
-        # sym.sympify ensures that subs will not fail (if the expression has no
-        # sympy symbols in it, this would normally fail)
-        for i, f in enumerate(self.f_sym):
-            self.f_sym[i] = sym.sympify(f).subs(subs)
-
-        # jac_sym is the SYMBOLIC Jacobian matrix, that is df/dc, where f is a
-        # row of the master equation and c is a species.
-        self.jac_sym = np.zeros((self.nvariables, self.nvariables), dtype=object)
-        for i, f in enumerate(self.f_sym):
-            for j, symbol in enumerate(self.symbols):
-                self.jac_sym[i, j] = sym.diff(f, symbol)
-
-        # Additionally, insert fixed species concentrations into rate
+        # Additionally, fixed species concentrations into rate
         # expressions
         for i, r in enumerate(self.rates):
             self.rates[i] = sym.sympify(r).subs(subs)
+
+        # derivative of rate expressions w.r.t. concentrations and vacancies
+        self.drdy = np.zeros((nrxns, self.nvariables), dtype=object)
+        self.drdvac = np.zeros((nrxns, len(self.vacancy)), dtype=object)
+        for i, rate in enumerate(self.rates):
+            for j, symbol in enumerate(self.symbols):
+                self.drdy[i, j] = sym.diff(rate, symbol)
+            for j, vac in enumerate(self.vacancy):
+                self.drdvac[i, j] = sym.diff(rate, vac.symbol)
 
         # Sets up and compiles the Fortran differential equation solving module
         self.setup_execs()
@@ -765,7 +764,9 @@ class Model(object):
                     break
 
         # Pass initial values to the fortran module
-        self.finitialize(U0, 1e-10, [1e-10]*self.nvariables, [], [], algvar)
+        atol = np.array([1e-32] * self.nvariables)
+        atol += 1e-16 * algvar
+        self.finitialize(U0, 1e-10, atol, [], [], algvar)
 
         self.initialized = True
 
@@ -777,15 +778,20 @@ class Model(object):
         # concentrations provided by the differential equation solver inside
         # the Fortran code (that is, y_vec is an INPUT to the functions that
         # calculate the residual, Jacobian, and rate)
-        y_vec = sym.IndexedBase('yin', shape=(self.nvariables,))
+        y_vec = sym.IndexedBase('y', shape=(self.nvariables,))
+        vac_vec = sym.IndexedBase('vac', shape=(len(self.vacancy),))
         # Map y_vec elements (1-indexed, of course) onto 'modelparam' symbols
         trans = {self.symbols[i]: y_vec[i + 1] for i in range(self.nvariables)}
+        trans.update({vac.symbol: y_vec[i + 1] for i, vac in enumerate(self.vacancy)})
         # Map string represntation of 'modelparam' symbols onto string
         # representation of y-vec elements
         str_trans = {}
-        for i in range(self.nvariables):
-            str_trans[sym.fcode(self.symbols[i], source_format='free')] = \
+        for i, symbol in enumerate(self.symbols):
+            str_trans[sym.fcode(symbol, source_format='free')] = \
                     sym.fcode(y_vec[i + 1], source_format='free')
+        for i, vac in enumerate(self.vacancy):
+            str_trans[sym.fcode(vac.symbol, source_format='free')] = \
+                    sym.fcode(vac_vec[i + 1], source_format='free')
         
         str_list = [key for key in str_trans]
         str_list.sort(key=len, reverse=True)
@@ -793,33 +799,46 @@ class Model(object):
         # these will contain lists of strings, with each element being one
         # Fortran assignment for the master equation, Jacobian, and
         # rate expressions
-        rescode = []
-        jaccode = []
+        dypdrcode = []
+        drdycode = []
         ratecode = []
+        vaccode = []
+        drdvaccode = []
+        dvacdycode = []
 
-        # Convert symbolic master equation into a valid Fortran string
-        for i in range(self.nvariables):
-            fcode = sym.fcode(self.f_sym[i], source_format='free')
-            # Replace modelparam symbols with their y_vec counterpart
+        for i, expr in enumerate(self.vac_sym):
+            fcode = sym.fcode(expr, source_format='free')
             for key in str_list:
                 fcode = fcode.replace(key, str_trans[key])
-            # Create actual line of code for calculating residual
-            rescode.append('   res({}) = '.format(i + 1) + fcode)
+            vaccode.append('   vac({}) = '.format(i + 1) + fcode)
+
+        for i, row in enumerate(self.drdvac):
+            for j, elem in enumerate(row):
+                if elem != 0:
+                    fcode = sym.fcode(elem, source_format='free')
+                    for key in str_list:
+                        fcode = fcode.replace(key, str_trans[key])
+                    drdvaccode.append('   drdvac({}, {}) = '.format(i + 1, j + 1) + fcode)
+        
+        for i, row in enumerate(self.dvacdy):
+            for j, elem in enumerate(row):
+                if elem != 0:
+                    dvacdycode.append('   dvacdy({}, {}) = '.format(i+1, j+1) + sym.fcode(elem, source_format='free'))
+
+        for i, row in enumerate(self.dypdr):
+            for j, elem in enumerate(row):
+                if elem != 0:
+                    dypdrcode.append('   dypdr({}, {}) = '.format(i+1, j+1) + sym.fcode(elem, source_format='free'))
 
         # Effectively the same as above, except on the two-dimensional Jacobian
         # matrix.
-        for i in range(self.nvariables):
-            for j in range(self.nvariables):
-                expr = self.jac_sym[j, i]
-                # Unlike the residual, some elements of the Jacobian can be 0.
-                # We don't need to bother writing 'jac(x,y) = 0' a hundred
-                # times in Fortran, so we omit those.
-                if expr != 0:
-                    fcode = sym.fcode(expr, source_format='free')
+        for i, row in enumerate(self.drdy):
+            for j, elem in enumerate(row):
+                if elem != 0:
+                    fcode = sym.fcode(elem, source_format='free')
                     for key in str_list:
                         fcode = fcode.replace(key, str_trans[key])
-                    jaccode.append('   jac({}, {}) = '.format(j + 1, i + 1) +
-                                   fcode)
+                    drdycode.append('   drdy({}, {}) = '.format(i + 1, j + 1) + fcode)
 
         # See residual above
         for i, rate in enumerate(self.rates):
@@ -833,9 +852,14 @@ class Model(object):
         # and rate expressions we just calculated.
         program = f90_template.format(neq=self.nvariables, nx=1,
                                       nrates=len(self.rates),
-                                      rescalc='\n'.join(rescode),
-                                      jaccalc='\n'.join(jaccode),
-                                      ratecalc='\n'.join(ratecode))
+                                      nvac=len(self.vacancy),
+                                      dypdrcalc='\n'.join(dypdrcode),
+                                      drdycalc='\n'.join(drdycode),
+                                      ratecalc='\n'.join(ratecode),
+                                      vaccalc='\n'.join(vaccode),
+                                      drdvaccalc='\n'.join(drdvaccode),
+                                      dvacdycalc='\n'.join(dvacdycode),
+                                      )
 
         # Generate a randomly-named temp directory for compiling the module.
         # We will name the actual module file after the directory.
@@ -851,17 +875,17 @@ class Model(object):
         # Write the pertinent data into the temp directory
         with open(os.path.join(dname, pyfname), 'w') as f:
             f.write(pyf_template.format(modname=modname, neq=self.nvariables,
-                    nrates=len(self.rates)))
+                    nrates=len(self.rates), nvac=len(self.vacancy)))
 
         # Compile the module with f2py
         f2py.compile(program, modulename=modname,
                      extra_args='--quiet '
                                 '--f90flags="-Wno-unused-dummy-argument '
-                                '-Wno-unused-variable -w -fopenmp" ' 
+                                '-Wno-unused-variable -w" ' 
                                 '-lsundials_fida '
-                                '-lsundials_fnvecopenmp '
+                                '-lsundials_fnvecserial '
                                 '-lsundials_ida '
-                                '-lsundials_nvecopenmp -lopenblas_openmp -lgomp ' +
+                                '-lsundials_nvecserial -lopenblas_openmp ' +
                                 os.path.join(dname, pyfname),
                      source_fn=os.path.join(dname, fname), verbose=0)
 
@@ -870,6 +894,7 @@ class Model(object):
 
         # Import the module on-the-fly with __import__. This is kind of a hack.
         solve_ida = __import__(modname)
+        self._solve_ida = solve_ida
 
         # The Fortran module's initialize, solve, and finalize routines
         # are mapped onto finitialize, fsolve, and ffinalize inside the Model
