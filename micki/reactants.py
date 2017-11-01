@@ -23,8 +23,7 @@ class _Thermo(object):
 
     This is the base object that all reactant objects inherit from.
     It initializes many parameters and provides methods for calculating
-    modeutions to the partition function from translation, rotation,
-    and vibration."""
+    the partition function from translation, rotation, and vibration."""
 
     def __init__(self):
         self.T = None

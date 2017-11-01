@@ -227,7 +227,7 @@ class Reaction(object):
             all_symbols.update(sym.sympify(dEr).atoms(sym.Symbol))
             all_symbols.update(sym.sympify(dEp).atoms(sym.Symbol))
 
-            if (dEp - dEr).subs({symbol: 0 for symbol in all_symbols}) == 0:
+            if sym.sympify(dEp - dEr).subs({symbol: 0 for symbol in all_symbols}) == 0:
                 self.alpha = dGf / (dGf + dGr)
             else:
                 a1 = (2*dEp - 2*dEr - dGf - dGr - sym.sqrt(8*(dEp-dEr)*dGf + (-2*dEp + 2*dEr + dGf + dGr)**2))/(4*(dEp-dEr))
@@ -427,7 +427,7 @@ class Reaction(object):
 
 
 class Model(object):
-    def __init__(self, T, Asite, z=0, lattice=None, reactor='CSTR'):
+    def __init__(self, T, Asite, z=0, lattice=None, reactor='CSTR', V=1.):
         self.reactions = OrderedDict()
         self._reactions = []
         self._species = []
@@ -438,6 +438,7 @@ class Model(object):
         self.fixed = []
         self.initialized = False
         self.U0 = None
+        self.V = V
 
         self.T = T  # System temperature
         self.Asite = Asite  # Area of adsorption site
@@ -502,7 +503,7 @@ class Model(object):
     def set_T(self, T):
         self._T = T
         for reaction in self._reactions:
-            reaction.update(T=T)
+            reaction.update(T=T, Asite=self.Asite)
         if self.U0 is not None:
             self.set_initial_conditions(self.U0)
 
@@ -514,7 +515,7 @@ class Model(object):
     def set_Asite(self, Asite):
         self._Asite = Asite
         for reaction in self._reactions:
-            reaction.update(Asite=Asite)
+            reaction.update(T=self.T, Asite=Asite)
         if self.U0 is not None:
             self.set_initial_conditions(self.U0)
 
@@ -697,7 +698,7 @@ class Model(object):
         # Array of symbolic rate expressions
         self.rates = np.zeros(nrxns, dtype=object)
         # Array of rate coefficients.
-        self.dypdr = np.zeros((self.nvariables, nrxns), dtype=int)
+        self.dypdr = np.zeros((self.nvariables, nrxns), dtype=float)
 
         for j, rxn in enumerate(self._reactions):
             rate_for = rxn.get_kfor(self.T, self.Asite, self.z)
@@ -707,6 +708,8 @@ class Model(object):
                 rcount = rxn.reactants.species.count(species)
                 pcount = rxn.products.species.count(species)
                 self.dypdr[i, j] = -rcount + pcount
+                if isinstance(species, _Fluid):
+                    self.dypdr[i, j] /= self.V
 
             for species in self._species + self.vacancy:
                 rcount = rxn.reactants.species.count(species)
@@ -1000,7 +1003,7 @@ class Model(object):
                                   RuntimeWarning, stacklevel=2)
 
     def copy(self, initialize=True):
-        newmodel = Model(self.T, self.Asite, self.z, self.lattice)
+        newmodel = Model(self.T, self.Asite, self.z, self.lattice, self.V)
         newmodel.add_reactions(self.reactions)
         newmodel.set_fixed(self.fixed)
         newmodel.set_solvent(self.solvent)

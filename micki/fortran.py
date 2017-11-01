@@ -9,7 +9,7 @@ f90_template = """module solve_ida
    real*8 :: diff({neq}), mas({neq}, {neq})
    real*8 :: jac({neq}, {neq})
    real*8 :: rates({nrates})
-   integer :: dypdr({neq}, {nrates})
+   real*8 :: dypdr({neq}, {nrates})
    integer :: dvacdy({nvac}, {neq})
 
 end module solve_ida
@@ -138,7 +138,6 @@ subroutine find_steady_state(neqin, nrates, dt, maxiter, epsilon, t1, u1, du1, r
 
       if (maxval(dutmp**2) < epsilon2) then
          converged = .TRUE.
-         print *, dutmp, du1
       end if
       if (i >= maxiter) then
          print *, "ODE NOT CONVERGED!"
@@ -308,7 +307,6 @@ subroutine ratecalc(neqin, yin)
    do i = 1, {nvac}
       if (vac(i) < -1d-10) then
          vac(i) = 0.d0
-         print *, vac
       endif
    enddo
 
@@ -399,7 +397,7 @@ python module {modname} ! in
             real*8 dimension({neq},{neq}) :: mas
             real*8 dimension({neq},{neq}) :: jac
             real*8 dimension({nrates}) :: rates
-            integer dimension({neq},{nrates}) :: dypdr
+            real*8 dimension({neq},{nrates}) :: dypdr
             integer dimension({nvac},{neq}) :: dvacdy
             integer, optional :: neq={neq}
         end module solve_ida
