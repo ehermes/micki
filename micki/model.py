@@ -106,9 +106,9 @@ class Reaction(object):
                 break
         if not self.involves_catalyst:
             for species in self.products:
-                if isinstance(species, Adsorbate);
-                self.involves_catalyst = True
-                break
+                if isinstance(species, Adsorbate):
+                    self.involves_catalyst = True
+                    break
 
         self.method = method
         if self.method is None:
