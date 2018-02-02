@@ -98,18 +98,17 @@ class Reaction(object):
         # FIXME: Add stoichiometry checking to ensure logical reactions.
         # Caveat: Don't fail on unbalanced adsorption sites, since some
         # species take up more than one site.
-        self.adsorption = False
 
-        adscheck = 0
+        self.involves_catalyst = False
         for species in self.reactants:
-            if isinstance(species, _Fluid):
-                adscheck += 1
-        for species in self.products:
-            if isinstance(species, _Fluid):
+            if isinstance(species, Adsorbate):
+                self.involves_catalyst = True
                 break
-        else:
-            if adscheck == 1:
-                self.adsorption = True
+        if not self.involves_catalyst:
+            for species in self.products:
+                if isinstance(species, Adsorbate);
+                self.involves_catalyst = True
+                break
 
         self.method = method
         if self.method is None:
@@ -427,7 +426,7 @@ class Reaction(object):
 
 
 class Model(object):
-    def __init__(self, T, Asite, z=0, lattice=None, reactor='CSTR', V=1.):
+    def __init__(self, T, Asite, z=0, lattice=None, reactor='CSTR', rhocat=1):
         self.reactions = OrderedDict()
         self._reactions = []
         self._species = []
@@ -438,7 +437,7 @@ class Model(object):
         self.fixed = []
         self.initialized = False
         self.U0 = None
-        self.V = V
+        self.rhocat = rhocat
 
         self.T = T  # System temperature
         self.Asite = Asite  # Area of adsorption site
@@ -708,8 +707,8 @@ class Model(object):
                 rcount = rxn.reactants.species.count(species)
                 pcount = rxn.products.species.count(species)
                 self.dypdr[i, j] = -rcount + pcount
-                if isinstance(species, _Fluid):
-                    self.dypdr[i, j] /= self.V
+                if isinstance(species, _Fluid) and rxn.involves_catalyst:
+                    self.dypdr[i, j] *= self.rhocat
 
             for species in self._species + self.vacancy:
                 rcount = rxn.reactants.species.count(species)
@@ -1003,7 +1002,7 @@ class Model(object):
                                   RuntimeWarning, stacklevel=2)
 
     def copy(self, initialize=True):
-        newmodel = Model(self.T, self.Asite, self.z, self.lattice, self.V)
+        newmodel = Model(self.T, self.Asite, self.z, self.lattice, self.rhocat)
         newmodel.add_reactions(self.reactions)
         newmodel.set_fixed(self.fixed)
         newmodel.set_solvent(self.solvent)

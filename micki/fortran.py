@@ -182,7 +182,7 @@ subroutine solve(neqin, nrates, nt, tfinal, t1, u1, du1, r1)
    r1(:, 1) = rates
 
 
-   call fidacalcic(1, dt, ier)
+!   call fidacalcic(1, dt, ier)
 
    do i = 2, nt
       tout = tout + dt
